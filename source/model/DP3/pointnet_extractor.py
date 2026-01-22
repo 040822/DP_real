@@ -210,9 +210,6 @@ class DP3Encoder(nn.Module):
                  pointcloud_encoder_cfg=None,
                  use_pc_color=False,
                  pointnet_type='pointnet',
-                 use_actions=False,
-                 action_shape = [1],
-                 debug = False
                  ):
         super().__init__()
         self.imagination_key = 'imagin_robot'
@@ -224,15 +221,11 @@ class DP3Encoder(nn.Module):
         self.use_imagined_robot = self.imagination_key in observation_space.keys()
         self.point_cloud_shape = observation_space[self.point_cloud_key]
         self.state_shape = observation_space[self.state_key]
-        self.action_shape = action_shape
-        print(f"[DP3Encoder] action shape: {self.action_shape}")
-        
         if self.use_imagined_robot:
             self.imagination_shape = observation_space[self.imagination_key]
         else:
             self.imagination_shape = None
-        
-        self.use_actions = use_actions
+            
         
         
         cprint(f"[DP3Encoder] point cloud shape: {self.point_cloud_shape}", "yellow")
@@ -263,24 +256,11 @@ class DP3Encoder(nn.Module):
 
         self.n_output_channels  += output_dim
         self.state_mlp = nn.Sequential(*create_mlp(self.state_shape[0], output_dim, net_arch, state_mlp_activation_fn))
-        
-        if use_actions:
-            self.n_output_channels  += output_dim # 再加个action_feat的维度
-            self.first_action_mlp = nn.Sequential(
-                *create_mlp(self.action_shape[0], output_dim, net_arch, state_mlp_activation_fn)
-            )
-            self.n_output_channels  += output_dim # 再加个action_feat的维度
-            self.future_action_mlp = nn.Sequential(
-                *create_mlp(self.action_shape[0], output_dim, net_arch, state_mlp_activation_fn)
-            )
 
         cprint(f"[DP3Encoder] output dim: {self.n_output_channels}", "red")
-        
-        self.debug = debug
 
 
     def forward(self, observations: Dict) -> torch.Tensor:
-        # point
         points = observations[self.point_cloud_key]
         assert len(points.shape) == 3, cprint(f"point cloud shape: {points.shape}, length should be 3", "red")
         if self.use_imagined_robot:
@@ -290,8 +270,6 @@ class DP3Encoder(nn.Module):
         
         # points = torch.transpose(points, 1, 2)   # B * 3 * N
         # points: B * 3 * (N + sum(Ni))
-        
-
         pn_feat = self.extractor(points)    # B * out_channel
         # 使用 PointNetEncoder 提取点云特征，输出维度为 out_channel
             
@@ -299,32 +277,7 @@ class DP3Encoder(nn.Module):
         
         # state为agent_pos
         state_feat = self.state_mlp(state)  # B * 64
-        
-        if self.debug:
-            print(f"[DP3 Encoder] points shape: {points.shape}")
-            print(f"[DP3 Encoder] state shape: {state.shape}")
-            print(f"[DP3 Encoder] pn_feat shape: {pn_feat.shape}")
-            print(f"[DP3 Encoder] state_feat shape: {state_feat.shape}")
-        
-        if self.use_actions:
-            first_action = observations.get('first_action', None)
-            future_action = observations.get('future_action', None)
-            if (future_action is None) or (first_action is None):
-                raise ValueError(" first_action or future_action is None, please check your observations")
-            else:
-                first_action_feat = self.first_action_mlp(first_action)
-                future_action_feat = self.future_action_mlp(future_action)
-                if self.debug:
-                    print(f"[DP3 Encoder] first_action shape: {first_action.shape}")
-                    print(f"[DP3 Encoder] future_action shape: {future_action.shape}")
-                    print(f"[DP3 Encoder] first_action_feat shape: {first_action_feat.shape}")
-                    print(f"[DP3 Encoder] future_action_feat shape: {future_action_feat.shape}")
-                final_feat = torch.cat([pn_feat, state_feat,first_action_feat,future_action_feat], dim=-1)
-
-        else:
-            final_feat = torch.cat([pn_feat, state_feat], dim=-1)
-
-        
+        final_feat = torch.cat([pn_feat, state_feat], dim=-1)
         return final_feat
 
 

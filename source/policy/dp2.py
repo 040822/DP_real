@@ -246,7 +246,6 @@ class DP2(BasePolicy):
         # apply conditioning
         noisy_trajectory[condition_mask] = cond_data[condition_mask]
         
-        # pdb.set_trace()
         # Predict the noise residual
         pred = self.model(noisy_trajectory, timesteps, 
             local_cond=local_cond, global_cond=global_cond)
