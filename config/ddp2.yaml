@@ -5,17 +5,17 @@ defaults:
 name: ${task.name}
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
-dp_name: DDP2
+policy_name: DDP2
+
+seed: 42
 
 # coarse和fine单独设置
+coarse_horizon: 7
+internal: 14
+
+
 horizon: -1
 n_action_steps: ${policy.fine_dp.n_action_steps}
-
-coarse_horizon: 16
-internal: 8
-
-seed: ${training.seed}
-
 n_obs_steps: 2
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
@@ -24,13 +24,15 @@ obs_as_global_cond: True
 past_action_visible: False
 
 policy:
-  _target_: policy.ddp2.DDP2
+  _target_: source.policy.ddp2.DDP2
   optimizer_cfg: ${optimizer}
   scheduler_cfg: ${lr_scheduler}
   num_epochs_coarse: ${training.num_epochs_coarse}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
 
   coarse_dp:
-    _target_: policy.ddp2_coarse.Coarse_DP2
+    _target_: source.policy.ddp2_coarse.Coarse_DP2
     use_point_crop: true
     condition_type: cross_attention_add
 
@@ -77,7 +79,7 @@ policy:
     debug: ${training.debug} 
 
   fine_dp:
-    _target_: policy.ddp2_fine.Fine_DP2
+    _target_: source.policy.ddp2_fine.Fine_DP2
     use_point_crop: true
     condition_type: cross_attention_add
 
@@ -160,9 +162,9 @@ checkpoint:
   save_top_k: 1
   save_last: True
   save_weights_only: False
-  every_n_epochs: 1
+  every_n_epochs: ${trainer.check_val_every_n_epoch}
   save_on_train_epoch_end: False
-  filename: 'epoch={epoch:0>3d}-loss={train/loss:.4f}.ckpt'
+  filename: 'epoch={epoch:0>3d}-loss={train/loss:.4f}'
   # filename: 'epoch={epoch:0>3d}-success_rate={rollout/success_rate:.4f}.ckpt'
   auto_insert_metric_name: False
 
@@ -171,7 +173,7 @@ trainer:
   accelerator: auto
   devices: 1
   precision: 32
-  check_val_every_n_epoch: 10
+  check_val_every_n_epoch: 1
   enable_progress_bar: True
   profiler: "simple"
 
@@ -179,27 +181,25 @@ trainer:
 training: # 用于存放trainer没有的参数
   num_epochs_coarse: -1
   debug: False
-  seed: 42
+  seed: ${seed}
   progress_bar_refresh_rate: 10
-  
+
 logging:
-  project: ${dp_name}_REAL
+  project: DP_real
+  group: ${policy_name}_${task_name}
+  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}
   mode: online
-  name: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
-  tags: ["${task_name}"]
-  id: null
-  group: null
-  save_code: True
+  tags: ["${task_name}", "${policy_name}"]
 
 multi_run:
-  run_dir: _outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
-  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
+  run_dir:  _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
 
 hydra:
   job:
     override_dirname: ${name}
   run:
-    dir: _outputs/${dp_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
+    dir: _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
   sweep:
-    dir: _outputs/${dp_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
+    dir: _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
     subdir: ${hydra.job.num}
