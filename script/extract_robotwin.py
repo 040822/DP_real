@@ -3,10 +3,10 @@ from pathlib import Path
 from tqdm import tqdm
 import h5py
 import numpy as np
-import torch
-import torch.nn.functional as F
 import cv2
 import re
+import os
+from concurrent.futures import ThreadPoolExecutor
 
 class Dataset:
     def __init__(self, dataset_dir, real_num, sim_num, pseudo_num, pseudo_except_list):
@@ -113,12 +113,24 @@ def decode_jpeg_frame(frame_bytes):
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     return img  # HWC, uint8
 
+
+def decode_jpeg_frames_parallel(frames):
+    # 并行化解码
+
+    if len(frames) == 0:
+        return np.empty((0, 0, 0, 3), dtype=np.uint8)
+
+    with ThreadPoolExecutor(max_workers=num_workers) as executor:
+        decoded = list(executor.map(decode_jpeg_frame, frames))
+    return np.stack(decoded, axis=0)
+
 def cam_preprocess(cam, min_len):
-    cam = np.array(cam[:min_len]).astype(np.uint8)
-    cam = np.moveaxis(cam, -1, -3)
-    cam = torch.tensor(cam).float()
-    cam = F.interpolate(cam, size=(256, 256), mode='bilinear').cpu().numpy()
-    return cam
+    cam = np.asarray(cam[:min_len], dtype=np.uint8)
+    resized = np.empty((min_len, 256, 256, cam.shape[-1]), dtype=np.uint8)
+    for i, frame in enumerate(cam):
+        resized[i] = cv2.resize(frame, (256, 256), interpolation=cv2.INTER_LINEAR)
+    resized = np.moveaxis(resized, -1, -3)
+    return resized
 
 def extract_hdf5_data_real(hdf5_file):
     # 加载真机数据的HDF5文件，并提取所需的数据。
@@ -167,13 +179,6 @@ def extract_hdf5_data_sim(hdf5_file):
         right_gripper = src["joint_action/right_gripper"][()]
         left_gripper = left_gripper[:, None] if left_gripper.ndim == 1 else left_gripper
         right_gripper = right_gripper[:, None] if right_gripper.ndim == 1 else right_gripper
-        
-        # obs
-        head_camera_rgb = src["observation/head_camera/rgb"][()]
-        head_camera_rgb = np.stack(
-            [decode_jpeg_frame(frame_bytes) for frame_bytes in head_camera_rgb],
-            axis=0,
-        )
 
         action = np.concatenate(
             (
@@ -185,8 +190,14 @@ def extract_hdf5_data_sim(hdf5_file):
             axis=1,
         )
         
+        # obs
+        cam_high = src["observation/head_camera/rgb"][()]
+        cam_high = decode_jpeg_frames_parallel(cam_high)
+        min_len = min(cam_high.shape[0], action.shape[0])
+        cam_high = cam_preprocess(cam_high, min_len)
+        
     return {
-        'cam_high': head_camera_rgb,
+        'cam_high': cam_high,
         'qpos': action,
         'action': action
     }
@@ -230,15 +241,16 @@ def process(dataset, output_path: str):
             episode_len = data["action"].shape[0]
             end_idx = current_idx + episode_len
             for key in data.keys():
-                datasets[key][current_idx:end_idx,:] = data[key][:]
+                datasets[key][current_idx:end_idx] = data[key]
             current_idx = end_idx
 
 def main():
+    # python script/extract_robotwin.py
     task_list = ["move_playingcard_color", "move_playingcard_others", "place_mouse_pad_color", "place_mouse_pad_others", "handover_others"]
     task_name = task_list[0]
     
     real_num = 10
-    sim_num = 200
+    sim_num = 0
     pseudo_num = 0
     pseudo_except_list = []
     output_name = ""
@@ -264,4 +276,6 @@ def main():
     process(dataset, output_path)
     
 if __name__ == "__main__":
+    num_workers = min(32, max(1, os.cpu_count() or 1))
+    print(f"Using {num_workers} workers for parallel JPEG decoding.")
     main()
