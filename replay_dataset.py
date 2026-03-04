@@ -26,7 +26,7 @@ import threading
 import hydra
 from lightning.pytorch import LightningModule
 from pytorch_lightning import seed_everything
-from common.pytorch_util import dict_apply
+from source.pytorch_util import dict_apply
 from pathlib import Path
 
 import sys
@@ -628,7 +628,7 @@ def load_hdf5(dataset_dir, dataset_name):
         exit()
 
     with h5py.File(dataset_path, 'r') as root:
-        is_sim = root.attrs['sim']
+        is_sim = root.attrs.get('sim', False)
         compressed = root.attrs.get('compress', False)
         qpos = root['/observations/qpos'][()]
         qvel = root['/observations/qvel'][()]
