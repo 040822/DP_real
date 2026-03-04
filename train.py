@@ -3,7 +3,7 @@
 
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
 
@@ -33,17 +33,26 @@ OmegaConf.register_new_resolver("eval", eval, replace=True) # 注册eval解析�
 
 @hydra.main(
     version_base=None,
-    config_path="./configs",
+    config_path="./config",
     config_name="ddp3"
 )
 def main(cfg: OmegaConf):
     OmegaConf.resolve(cfg)
     output_dir = pathlib.Path(HydraConfig.get().run.dir)
     
+    resume_ckpt = cfg.get("resume_ckpt", None)
+    two_train_ckpt = cfg.get("two_train_ckpt", None) 
+    
     # set seed
     seed_everything(cfg.training.seed)
     # configure model
     model: LightningModule = hydra.utils.instantiate(cfg.policy)
+    
+    # 二阶段训练，加载第一阶段的模型权重继续训练
+    if two_train_ckpt is not None:
+        print(f"[Train] Loading model weights from {two_train_ckpt} for two-stage training...")
+        state_dict = torch.load(two_train_ckpt, map_location="cpu", weights_only=False)["state_dict"]
+        model.load_state_dict(state_dict, strict=False) # 加载权重，允许不完全匹配
     
     # [DDP3] 处理数据集大小和分割idx
     if cfg.policy_name == "DDP3":
@@ -86,11 +95,12 @@ def main(cfg: OmegaConf):
         callbacks=callbacks,
         logger=logger,
     )
-
     trainer.fit(
         model,
         train_dataloader,
         val_dataloader,
+        ckpt_path=resume_ckpt,
+        weights_only = False
     )
 
 if __name__ == "__main__":

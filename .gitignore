@@ -54,3 +54,8 @@ pretrained_weights/mixRe10kDl3dv.ckpt
 data/*
 _outputs/*
 rod.log
+
+
+config/task/*
+!config/task/default_task.yaml
+data_pre/*
