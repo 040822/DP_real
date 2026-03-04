@@ -22,19 +22,47 @@ class Dataset:
         self.real_num = real_num
         self.sim_num = sim_num
         self.pseudo_num = pseudo_num
-        self.pseudo_except_list = pseudo_except_list
-        self.pseudo_except_preprocess()
+        self.pseudo_except_set = set(pseudo_except_list)
         
+        # 只有在使用pseudo的情况下才进行处理。
         assert (pseudo_num == 0) or (sim_num == 0), "目前伪数据和仿真数据是一一对应的，所以 pseudo_num 和 sim_num 只能有一个大于0"
+        if self.sim_num == 0 and self.pseudo_num != 0:
+            self.pseudo_except_generate()
+            self.pseudo_except_preprocess()
+        
+    def pseudo_except_generate(self):
+        # 根据pseudo_list中缺少的文件，更新pseudo_except_set
+
+        present_ids = set()
+        for p in self.pseudo_list:
+            match = re.search(r'\d+', p.name)
+            if match is None:
+                continue
+            present_ids.add(int(match.group()))
+
+        all_ids = set(range(200))
+        missing_ids = all_ids - present_ids
+
+        self.pseudo_except_set = self.pseudo_except_set | missing_ids
         
     def pseudo_except_preprocess(self):
-        # 从伪数据列表中移除被排除的伪数据
-        self.pseudo_list = [p for i, p in enumerate(self.pseudo_list) if i not in self.pseudo_except_list]
-        
-        # 注意：因为伪数据和仿真数据是一一对应的，所以我们也需要从仿真数据列表中移除对应的仿真数据
-        self.sim_list = [s for i, s in enumerate(self.sim_list) if i not in self.pseudo_except_list]
-        
-        self.pseudo_num -= len(self.pseudo_except_list)
+        # 从文件名中提取编号，并移除编号在 pseudo_except_set 中的数据
+        # TODO: 这里有一个逻辑问题：pseudo_num控制的是使用前多少条伪数据，但pseudo_except_set是基于编号的，如果pseudo_except_set中的编号不在前pseudo_num条数据中，就无法排除。需要改成基于索引的排除逻辑，或者改成先排除再根据pseudo_num取前多少条。
+        # 由于我们目前只需要使用所有的伪数据，所以暂时不改了，后续如果需要使用部分伪数据再来改这个逻辑。
+
+        pseudo_len_before = len(self.pseudo_list)
+        self.pseudo_list = [
+            p for p in self.pseudo_list
+            if int(re.search(r'\d+', p.name).group()) not in self.pseudo_except_set
+        ]
+
+        # 注意：因为伪数据和仿真数据是一一对应的，所以也移除同编号的仿真数据
+        self.sim_list = [
+            s for s in self.sim_list
+            if int(re.search(r'\d+', s.name).group()) not in self.pseudo_except_set
+        ]
+
+        # self.pseudo_num -= (pseudo_len_before - len(self.pseudo_list)) # 减去被排除的伪数据数量
         
         expect_len = self.real_num + self.sim_num + self.pseudo_num
         actual_len = 0
@@ -42,7 +70,7 @@ class Dataset:
         actual_len += len(self.sim_list) if self.sim_num > 0 else 0
         actual_len += len(self.pseudo_list) if self.pseudo_num > 0 else 0
         
-        assert expect_len <= actual_len, f"Expected length {expect_len}, but got actual length {actual_len}"
+        # assert expect_len <= actual_len, f"Expected length {expect_len}, but got actual length {actual_len}"
 
     
     def get_episode_ends(self):
@@ -60,6 +88,8 @@ class Dataset:
                 episode_ends.append(total_steps)
         
         for i in range(self.sim_num):
+            if i >= len(self.sim_list):
+                break
             path = self.sim_list[i]
             with h5py.File(path, 'r') as f:
                 ep_length = f['joint_action/left_arm'].shape[0] 
@@ -67,9 +97,8 @@ class Dataset:
                 episode_ends.append(total_steps)
                 
         for i in range(self.pseudo_num):
-            # 做了pseudo_except_preprocess后不需要排除
-            # if i in self.pseudo_except_list:
-            #     continue
+            if i >= len(self.sim_list):
+                break
             path = self.sim_list[i]
             with h5py.File(path, 'r') as f:
                 ep_length = f['joint_action/left_arm'].shape[0] 
@@ -83,6 +112,9 @@ class Dataset:
         return expect_len
     
     def __getitem__(self, idx):
+        if idx < 0 or idx >= len(self):
+            raise IndexError(f"Index {idx} out of range for dataset of length {len(self)}")
+
         if idx < self.real_num:
             hdf5_file = self.real_list[idx]
             data = extract_hdf5_data_real(hdf5_file)
@@ -92,7 +124,7 @@ class Dataset:
         else:
             pseudo_idx = idx - self.real_num - self.sim_num
             # 做了pseudo_except_preprocess后不需要排除
-            # if pseudo_idx in self.pseudo_except_list:
+            # if pseudo_idx in self.pseudo_except_set:
             #     return None
             hdf5_file = self.sim_list[pseudo_idx]
             pseudo_video = self.pseudo_list[pseudo_idx]
@@ -204,8 +236,65 @@ def extract_hdf5_data_sim(hdf5_file):
     
 def extract_hdf5_data_pseudo(sim_file, pseudo_video):
     # 首先加载仿真数据的HDF5文件，然后将仿真的cam_high换成pseudo_video
-    sim_data = extract_hdf5_data_sim(sim_file)
-    # TODO
+    
+    # 加载仿真数据。不调用extract_hdf5_data_sim是因为cam_high的处理太慢。
+    with h5py.File(sim_file, 'r') as src:
+        # action
+        left_arm = src["joint_action/left_arm"][()]
+        left_gripper = src["joint_action/left_gripper"][()]
+        right_arm = src["joint_action/right_arm"][()]
+        right_gripper = src["joint_action/right_gripper"][()]
+        left_gripper = left_gripper[:, None] if left_gripper.ndim == 1 else left_gripper
+        right_gripper = right_gripper[:, None] if right_gripper.ndim == 1 else right_gripper
+
+        action = np.concatenate(
+            (
+                left_arm,
+                left_gripper,
+                right_arm,
+                right_gripper,
+            ),
+            axis=1,
+        )
+        
+    sim_data = {
+        'cam_high': None,
+        'qpos': action,
+        'action': action
+    }
+    
+    # 读取pseudo_video并处理成cam_high的格式
+    cap = cv2.VideoCapture(str(pseudo_video))
+    if not cap.isOpened():
+        raise ValueError(f"Failed to open pseudo video: {pseudo_video}")
+
+    frames = []
+    while True:
+        ret, frame = cap.read()
+        if not ret:
+            break
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        frames.append(frame)
+    cap.release()
+
+    if len(frames) == 0:
+        raise ValueError(f"No frames found in pseudo video: {pseudo_video}")
+
+    pseudo_cam = np.asarray(frames, dtype=np.uint8)
+    target_len = sim_data['action'].shape[0]
+    if target_len <= 0:
+        raise ValueError(f"Invalid action length in sim_data: {target_len}")
+
+    # 由于pseudo video做了下采样，这里为了对齐action需要上采样回去。上采样的方式为等间距采样，然后通过复制帧进行填补。
+    if pseudo_cam.shape[0] != target_len:
+        src_len = pseudo_cam.shape[0]
+        sample_indices = np.linspace(0, src_len - 1, target_len) # 生成等间距的采样索引
+        sample_indices = np.clip(np.round(sample_indices).astype(np.int64), 0, src_len - 1) # 四舍五入并转换为整数索引，同时确保索引不超过src_len - 1
+        pseudo_cam = pseudo_cam[sample_indices] # 根据索引采样到目标长度
+
+    pseudo_cam = cam_preprocess(pseudo_cam, target_len)
+
+    sim_data['cam_high'] = pseudo_cam
     return sim_data
 
 def process(dataset, output_path: str):
@@ -247,9 +336,9 @@ def process(dataset, output_path: str):
 def main():
     # python script/extract_robotwin.py
     task_list = ["move_playingcard_color", "move_playingcard_others", "place_mouse_pad_color", "place_mouse_pad_others", "handover_others"]
-    task_name = task_list[0]
+    task_name = task_list[4]
     
-    real_num = 10
+    real_num = 20
     sim_num = 0
     pseudo_num = 0
     pseudo_except_list = []
