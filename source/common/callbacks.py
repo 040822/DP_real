@@ -14,15 +14,18 @@ class ModelAveragingCallback(Callback):
         self._latest_update_step = update_after_steps
 
     def on_fit_start(self, trainer, pl_module) -> None:
-        device = self._device or pl_module.device
-        self._averaged_model = AveragedModel(model=pl_module, device=device, avg_fn=self._avg_fn, use_buffers=True)
+        if self._averaged_model is None:
+            device = self._device or pl_module.device
+            self._averaged_model = AveragedModel(model=pl_module, device=device, avg_fn=self._avg_fn, use_buffers=True)
 
     def on_train_batch_end(self, trainer, pl_module, outputs, batch, batch_idx):
-        if trainer.global_step > self._latest_update_step:
+        if self._averaged_model is not None and trainer.global_step > self._latest_update_step:
             self._averaged_model.update_parameters(pl_module)
             self._latest_update_step = trainer.global_step
 
     def on_fit_end(self, trainer, pl_module):
+        if self._averaged_model is None:
+            return
         average_params = itertools.chain(self._averaged_model.module.parameters(), self._averaged_model.module.buffers())
         current_params = itertools.chain(pl_module.parameters(), pl_module.buffers())
         for average_param, current_param in zip(average_params, current_params):
@@ -43,6 +46,8 @@ class ModelAveragingCallback(Callback):
         self._latest_update_step = state_dict["latest_update_step"]
 
     def on_save_checkpoint(self, trainer, pl_module, checkpoint):
+        if self._averaged_model is None:
+            return
         average_state = self._averaged_model.state_dict()
         checkpoint["current_state_dict"] = checkpoint["state_dict"]
         checkpoint["state_dict"] = OrderedDict({
@@ -53,6 +58,10 @@ class ModelAveragingCallback(Callback):
         # }
 
     def on_load_checkpoint(self, trainer, pl_module, checkpoint):
+        if self._averaged_model is None:
+            device = self._device or pl_module.device
+            self._averaged_model = AveragedModel(model=pl_module, device=device, avg_fn=self._avg_fn, use_buffers=True)
+
         if ("current_state_dict" in checkpoint) and ("model_averaging_state" in checkpoint):
             average_state = {"module." + name: value for name, value in checkpoint["state_dict"].items()}
             average_state |= checkpoint["model_averaging_state"]
