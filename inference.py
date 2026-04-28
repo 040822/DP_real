@@ -30,6 +30,7 @@ from lightning.pytorch import LightningModule
 from pytorch_lightning import seed_everything
 from source.common.pytorch_util import dict_apply
 from pathlib import Path
+from termcolor import cprint
 
 import sys
 import numpy as np
@@ -640,6 +641,10 @@ def model_inference(args):
     # 1 load policy 加载模型
     payload = torch.load(open(os.path.join(args.ckpt_dir, args.ckpt_name), 'rb'), pickle_module=dill)
     # seed_everything(payload['cfg']['seed'])
+    # payload['cfg']["horizon"] = 32
+    # payload['cfg']["policy"]["horizon"] = 32
+    # payload['cfg']["policy"]["n_action_steps"] = 30
+    
     policy: LightningModule = hydra.utils.instantiate(payload['cfg']["policy"])
     # dataset = hydra.utils.instantiate(payload['cfg']["task"]["dataset"])
     # policy.set_normalizer(dataset.get_normalizer())
@@ -666,39 +671,66 @@ def model_inference(args):
     env.update_obs(obs)
     
     old_action = None
+    
+    right1 = np.array([0.8215389, 2.1289692, -1.8642251, -0.28003284, 1.1474806, 0.8877168, 0.0])
 
     with torch.inference_mode():
         publish_step = 0
         rate = rospy.Rate(args.publish_rate)
+        
+        gripper_switch = 0
         while True and not rospy.is_shutdown():
             publish_step = publish_step + 1
             if publish_step > args.max_publish_step:
                 break
             actions = env.get_action(policy) # 获得action
+            actions = np.array(actions)
+            
+            # if gripper_switch == 1:
+            #     hack_action = old_action
+            #     hack_action[7:14] = right1
+            #     actions = np.stack([old_action, hack_action])
+            #     actions = action_topp(actions, num=4)
+            #     gripper_switch += 1
+            #     cprint('right hack','red')
+            
+            actions = action_topp(actions, num=4) # 插值
 
-            actions = action_topp(actions, num=2) # 插值
-
-            # actions = edit_action
                  
             for action in actions:
                 if rospy.is_shutdown():
                     break
+                
+                new_action = np.array(action, copy=True)
 
                 left_action = action[:7] 
                 right_action = action[7:14]
                 # 处理夹抓状态
+                cprint(f'left_gripper:{left_action[-1]}, right_gripper:{right_action[-1]}','yellow')
                 left_action[-1] = left_action[-1] if left_action[-1] > 0.025 else 0
                 right_action[-1] = right_action[-1] if right_action[-1] > 0.025 else 0
+                # if right_action[-1] > 0.5:
+                #     right_action[-1] = 0.09
+                # elif right_action[-1] < 0.03:
+                #     right_action[-1] = 0
+                
                 vel_action = None
                 if args.use_robot_base:
                     vel_action = action[14:16]
 
-                action_diff = action_mse(old_action, action)
+                action_diff = action_mse(old_action, new_action)
+                left_gripper_diff, right_gripper_diff = gripper_diff(old_action, new_action)
                 print(f'Action diff mse: {action_diff}')
                 
                 if action_diff > 0.01:
-                    print('Action jump detected, skip this action')
+                    cprint('Action jump detected, skip this action','red')
                     continue
+                # if right_gripper_diff > 0.1 and right_action[-1] > 0.03:
+                #     cprint('Right gripper jump detected, skip this action','red')
+                #     continue
+                # if gripper_switch == 0 and new_action[13] < 0.001:
+                #     gripper_switch += 1
+                #     cprint('gripper_switch == 1','red')
 
                 env.step(left_action, right_action, vel_action)
 
@@ -708,9 +740,18 @@ def model_inference(args):
 
                 rate.sleep()
                 
-                old_action = action
+                old_action = new_action
                 
-                
+def gripper_diff(old_action, new_action):
+    if old_action is None or new_action is None:
+        # 初始动作不设置保护
+        return 0, 0
+    
+    left_gripper_diff = abs(old_action[6]-new_action[6]) 
+    right_gripper_diff = abs(old_action[13]-new_action[13])
+
+    return left_gripper_diff, right_gripper_diff
+
 
 def action_mse(old_action, new_action):
     if old_action is None or new_action is None:

@@ -11,6 +11,7 @@ import argparse
 from einops import rearrange
 import cv2
 import h5py
+import time
 
 from collections import deque
 
@@ -725,11 +726,14 @@ def model_inference(args):
     dataset_name = f'episode_{episode_idx}'
     qposs, qvels, efforts, actions, base_actions, image_dicts = load_hdf5(os.path.join(dataset_dir, task_name), dataset_name)
 
+    actions = action_topp(actions, num=1)
+
     with torch.inference_mode():
         publish_step = 0
         rate = rospy.Rate(args.publish_rate)
         while True and not rospy.is_shutdown():
             publish_step = publish_step + 1
+            step=0
             if publish_step > args.max_publish_step:
                 break
             
@@ -739,8 +743,16 @@ def model_inference(args):
                 if rospy.is_shutdown():
                     break
 
+                if step%16 == 0:
+                    time.sleep(1)
+
                 left_action = action[:7] 
                 right_action = action[7:14]
+                noise = 0.005 * np.random.randn(*right_action.shape)
+                noise[-1] = 0
+                right_action = right_action + noise
+                right_action[-1]  -= 0.01
+                
                 left_action[-1] = left_action[-1] if left_action[-1] > 0.025 else 0
                 right_action[-1] = right_action[-1] if right_action[-1] > 0.025 else 0
                 vel_action = None
@@ -753,6 +765,48 @@ def model_inference(args):
                 env.update_obs(obs)
 
                 rate.sleep()
+                step+=1
+
+def action_topp(actions, num=8):
+    """
+    对 actions 的每对相邻帧插入 num 个线性插值点。
+    - actions: list / np.ndarray / torch.Tensor，时间维在第0维
+    - num: 每个相邻对之间插入的中间帧数量（不包含两端）
+    返回与输入类型一致（torch.Tensor 会保持原 device 与 dtype，否则返回 np.ndarray）。
+    """
+    is_torch = torch.is_tensor(actions)
+    if is_torch:
+        # 如果输入是torch张量，则先把它转换为numpy数组，再转换回来
+        device = actions.device
+        dtype = actions.dtype
+        arr = actions.detach().cpu().numpy()
+    else:
+        arr = np.asarray(actions)
+
+    if arr.ndim == 1:
+        arr = arr[np.newaxis, :]
+    if num <= 0 or arr.shape[0] < 2:
+        # 如果不需要插值或时间维长度不足2，直接返回原始数据
+        out = arr.copy()
+        if is_torch:
+            return torch.tensor(out, device=device, dtype=dtype)
+        return out
+
+    pieces = []
+    T = arr.shape[0]
+    for i in range(T - 1):
+        a = arr[i]
+        b = arr[i + 1]
+        # 生成包含两端点的 num+2 个点，然后去掉最后一个以避免重复
+        segment = np.linspace(a, b, num=num + 2, axis=0)
+        pieces.append(segment[:-1])
+    pieces.append(arr[-1:].copy())
+    out = np.vstack(pieces)
+
+    if is_torch:
+        return torch.tensor(out, device=device, dtype=dtype)
+    return out
+
 
 def get_arguments():
     parser = argparse.ArgumentParser()
