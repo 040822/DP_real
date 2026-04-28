@@ -3,7 +3,7 @@
 
 
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "3"
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
 
