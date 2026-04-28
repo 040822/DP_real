@@ -1,4 +1,4 @@
-name: 2a_grab_roller
+name: default_task
 agent_num: 2
 
 image_shape: &image_shape [3, 256, 256]
@@ -18,7 +18,7 @@ shape_meta: &shape_meta
 
 dataset:
   _target_: dataset.dataset2d_real.Dataset2D
-  dataset_path: /home/wenxin/office/EDP_real/grab_roller_dual.h5
+  dataset_path: ./data/default_task.h5
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
