@@ -28,7 +28,7 @@ import threading
 import hydra
 from lightning.pytorch import LightningModule
 from pytorch_lightning import seed_everything
-from common.pytorch_util import dict_apply
+from source.common.pytorch_util import dict_apply
 from pathlib import Path
 
 import sys

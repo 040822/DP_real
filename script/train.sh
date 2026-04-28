@@ -1,8 +1,37 @@
 # Examples:
 # tmux new -s train
 
-############ DP2 Tasks ############
-# bash scripts/train.sh dp2 1a_pick_meat_2d 0
+############ move_playingcard_color ############
+# bash script/train.sh dp2 move_playingcard_color_real10 3
+# bash script/train.sh dp2 move_playingcard_color_real20 2
+# bash script/train.sh dp2 move_playingcard_color_sim200 0 ✅
+# bash script/train.sh dp2 move_playingcard_color_real10_sim200 0 ✅
+# bash script/train.sh dp2 move_playingcard_color_pseudo200 0 ✅
+# bash script/train.sh dp2 move_playingcard_color_real10_pseudo200 3 ✅
+
+############ move_playingcard_others ############
+# bash script/train.sh dp2 move_playingcard_others_real10 3
+# bash script/train.sh dp2 move_playingcard_others_real20 2
+# bash script/train.sh dp2 move_playingcard_others_sim200 1 ✅
+# bash script/train.sh dp2 move_playingcard_others_real10_sim200 1 ✅
+# bash script/train.sh dp2 move_playingcard_others_pseudo200 1 ✅
+# bash script/train.sh dp2 move_playingcard_others_real10_pseudo200 3 ✅
+
+############ place_mouse_pad_color ############
+# bash script/train.sh dp2 place_mouse_pad_color_real10 3
+# bash script/train.sh dp2 place_mouse_pad_color_real20 2
+# bash script/train.sh dp2 place_mouse_pad_color_sim200 3 ✅
+# bash script/train.sh dp2 place_mouse_pad_color_real10_sim200 3 ✅
+# bash script/train.sh dp2 place_mouse_pad_color_pseudo200 1 
+# bash script/train.sh dp2 place_mouse_pad_color_real10_pseudo200 3 
+
+############ place_mouse_pad_others ############
+# bash script/train.sh dp2 place_mouse_pad_others_real10 3
+# bash script/train.sh dp2 place_mouse_pad_others_real20 2
+# bash script/train.sh dp2 place_mouse_pad_others_sim200 0 ✅
+# bash script/train.sh dp2 place_mouse_pad_others_real10_sim200 1 ✅
+# bash script/train.sh dp2 place_mouse_pad_others_pseudo200 1 
+# bash script/train.sh dp2 place_mouse_pad_others_real10_pseudo200 3 
 
 
 policy_name=${1}
