@@ -1,0 +1,76 @@
+# train_many_tasks.py 配置说明（全量YAML驱动）
+#
+# 用法：
+#   1) 修改本文件或复制为 scripts/train_many_tasks.yaml
+#   2) 直接运行：python scripts/train_many_tasks.py
+#
+# 顶层字段说明：
+# - scheduler: 调度器配置（GPU、tmux、轮询、dry_run 等）
+# - defaults: 任务默认参数，会与每个 tasks 项 merge
+# - tasks: 训练任务列表（可批量展开）
+#
+# tasks 字段说明：
+# - 必填: policy_name, task_name, addition_info, seed
+# - 可选: extra_args（透传到 train.sh 的第5个及之后参数，再继续透传给 train.py）
+#   例如可传 Hydra 覆盖参数：
+#   - training.lr=1e-4
+#   - dataloader.batch_size=64
+#   当 scheduler.extra_args_expand=true 时，支持字典写法并对列表值做笛卡尔积展开
+#   当 scheduler.addition_info_template=true 时，addition_info 支持 ${key} 模板替换
+# - 每个字段支持单值或列表，列表会做笛卡尔积展开
+
+scheduler:
+  # 使用哪些GPU，支持两种写法：
+  # 1) 字符串: "0,1,2"
+  # 2) 列表: [0, 1, 2]
+  gpus: [5,6,7]
+
+  # tmux session 名称；为空则自动生成 train_many_MMDD_HHMMSS
+  session: "train_real_dp"
+
+  # 工作目录；推荐使用仓库根目录（相对路径相对于本YAML文件）
+  workdir: ".."
+
+  # 单任务训练脚本路径（相对路径相对于本YAML文件）
+  train_script: "train.sh"
+
+  # 显存调度阈值：每 mem_per_task_gb 空闲显存允许启动1个任务
+  mem_per_task_gb: 25
+
+  # 调度轮询间隔（秒），用于检查GPU显存和启动新任务。尽量设置得较大一些，避免频繁检查和启动任务导致的命令冲突或资源占用峰值过高。如果设置得过小，可能会导致多个任务同时启动，尤其是在训练初期显存占用较低的时候。
+  poll_interval: 600
+
+  # 启动任务间隔（秒），避免过快创建多个tmux窗口导致命令冲突；同时也避免训练任务同步进行，导致显存/内存占用峰值过高
+  task_start_interval: 10
+
+  # 是否允许复用已有同名tmux session
+  allow_existing_session: true
+
+  # 是否仅预演（打印命令，不创建tmux窗口）
+  dry_run: false
+
+  # 是否展开 extra_args（默认 false）
+  # false: extra_args 原样透传
+  # true: 若 extra_args 为字典，则对其中列表值做笛卡尔积展开
+  extra_args_expand: true
+
+  # 是否启用 addition_info 模板（默认 false）
+  # true: 支持 ${coarse_horizon}_${internal} 这类变量替换
+  # 变量来自 extra_args 字典键（通常配合 extra_args_expand=true）
+  addition_info_template: true
+
+defaults:
+  policy_name: ddp2
+
+  addition_info: "0428"
+  # addition_info: "${coarse_horizon}+${internal}" # 需要 scheduler.addition_info_template=true 才会生效
+
+  # 可选：给所有任务统一追加训练参数
+  # extra_args:
+  #   - "training.lr=1e-4"
+  #   - "dataloader.batch_size=64"
+
+tasks:
+    - policy_name: [act, dp2, ddp2]
+    - task_name: [collecting_objects, stacking_playing_card]
+      seed: [42]
