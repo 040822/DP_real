@@ -59,3 +59,4 @@ rod.log
 config/task/*
 !config/task/default_task.yaml
 data_pre/*
+data_pre
