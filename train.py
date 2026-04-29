@@ -3,7 +3,7 @@
 
 
 import os
-# os.environ["CUDA_VISIBLE_DEVICES"] = "3"
+# os.environ["CUDA_VISIBLE_DEVICES"] = "5"
 os.environ["HYDRA_FULL_ERROR"] = "1"
 
 
@@ -19,6 +19,7 @@ from lightning.pytorch.callbacks import LearningRateMonitor, TQDMProgressBar
 from lightning import seed_everything
 from lightning.pytorch.loggers.wandb import WandbLogger
 from lightning.pytorch import LightningModule
+from lightning.pytorch.strategies import DDPStrategy
 
 from source.common.callbacks import ModelAveragingCallback, SaveConfigCallback
 from source.common.callback_sample import SampleCallback
@@ -55,7 +56,7 @@ def main(cfg: OmegaConf):
         model.load_state_dict(state_dict, strict=False) # 加载权重，允许不完全匹配
     
     # [DDP3] 处理数据集大小和分割idx
-    if cfg.policy_name == "DDP3":
+    if cfg.policy_name == "DDP2":
         horizon = cfg.policy.coarse_dp.horizon-1
         internal = cfg.policy.coarse_dp.internal
         sample_horizon = (horizon-1)*internal + horizon + 1
@@ -64,6 +65,10 @@ def main(cfg: OmegaConf):
         idx = torch.cat([torch.zeros(1, dtype=idx.dtype), idx]) #加入0
         model.set_idx(idx) # 设置idx
         cfg.task.dataset.horizon = sample_horizon # 设置数据集的horizon
+        # cfg.task.dataset.pad_after = int(1 * sample_horizon) # 设置数据集的pad_after, 因为DDP3需要在数据末尾进行padding以满足horizon长度
+        cfg.task.dataset.pad_after = int(0.25 * sample_horizon) # 设置数据集的pad_after, 因为DDP3需要在数据末尾进行padding以满足horizon长度
+        print("[Train] dataset_pad_after:", cfg.task.dataset.pad_after)
+        
     
     dataset = hydra.utils.instantiate(cfg.task.dataset)
     train_dataset, val_dataset = random_split(dataset, [int(len(dataset)*0.95), len(dataset) - int(len(dataset)*0.95)])
@@ -76,7 +81,7 @@ def main(cfg: OmegaConf):
     callbacks = [
         LearningRateMonitor(logging_interval='step'),
         hydra.utils.instantiate(cfg.checkpoint, dirpath=output_dir / 'checkpoints'),
-        ModelAveragingCallback(None, get_ema_avg_fn(0.9), cfg.ema.update_after_steps),
+        ModelAveragingCallback(decay=cfg.ema.decay, update_every_n_steps=cfg.ema.update_every_n_steps),
         SaveConfigCallback(OmegaConf.to_container(cfg, resolve=True)),
         TQDMProgressBar(refresh_rate=cfg.training.progress_bar_refresh_rate if 'progress_bar_refresh_rate' in cfg.training else 10),
         SampleCallback(),
@@ -89,9 +94,7 @@ def main(cfg: OmegaConf):
 
     trainer = Trainer(
         **cfg.trainer,
-        strategy="ddp_find_unused_parameters_true"
-            if torch.cuda.device_count() > 1
-            else "auto",
+        strategy=DDPStrategy(find_unused_parameters=True) if torch.cuda.device_count() > 1 else 'auto',
         callbacks=callbacks,
         logger=logger,
     )

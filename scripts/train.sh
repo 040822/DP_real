@@ -1,6 +1,6 @@
 # Examples:
 # tmux new -s train
-# bash script/train.sh dp2 move_playingcard_color_real10 3
+# bash scripts/train.sh dp2 collecting_objects 4
 
 if [[ $# -lt 3 ]]; then
     echo "Usage: bash scripts/train.sh <policy_name> <task_name> <gpu_id> [info] [hydra_overrides...]"
