@@ -17,7 +17,7 @@ shape_meta: &shape_meta
     shape: *action_shape
 
 dataset:
-  _target_: dataset.dataset2d_real.Dataset2D
+  _target_: source.dataset.dataset2d_real.Dataset2D
   dataset_path: ./data/default_task.h5
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
@@ -28,5 +28,5 @@ dataset:
       qpos: *action_shape
     action: *action_shape
   seperate_action: False
-  use_mem: False
+  use_mem: True
   

@@ -51,13 +51,13 @@ class Coarse_DP3(BaseImagePolicy):
 
 
         obs_encoder = DP3Encoder(observation_space=obs_dict,
-                                                img_crop_shape=crop_shape,
-                                                out_channel=encoder_output_dim,
-                                                pointcloud_encoder_cfg=pointcloud_encoder_cfg,
-                                                use_pc_color=use_pc_color,
-                                                pointnet_type=pointnet_type,
-                                                debug = debug
-                                                )
+            img_crop_shape=crop_shape,
+            out_channel=encoder_output_dim,
+            pointcloud_encoder_cfg=pointcloud_encoder_cfg,
+            use_pc_color=use_pc_color,
+            pointnet_type=pointnet_type,
+            debug = debug
+        )
 
         # create diffusion model
         obs_feature_dim = obs_encoder.output_shape()
@@ -77,13 +77,6 @@ class Coarse_DP3(BaseImagePolicy):
         cprint(f"[DP3 init] pointnet_type: {self.pointnet_type}", "yellow")
         
         self.debug = debug
-        if self.debug:
-            cprint(f"Debug mode", "red")
-            cprint(f"[DP3 init] obs_feature_dim: {obs_feature_dim}", "yellow")
-            cprint(f"[DP3 init] input_dim: {input_dim}", "yellow")
-            cprint(f"[DP3 init] global_cond_dim: {global_cond_dim}", "yellow")
-            cprint(f"[DP3 init] diffusion_step_embed_dim: {diffusion_step_embed_dim}", "yellow")
-            cprint(f"[DP3 init] condition_type: {condition_type}", "yellow")
 
         model = EditableDiffusion(
             input_dim=input_dim,
@@ -103,14 +96,12 @@ class Coarse_DP3(BaseImagePolicy):
         self.obs_encoder = obs_encoder
         self.model = model
         self.noise_scheduler = noise_scheduler
-        # DDPM scheduler 相当于denoise(采样器）
-        
         
         self.noise_scheduler_pc = copy.deepcopy(noise_scheduler)
         self.mask_generator = CoarseMaskGenerator(
             action_dim=action_dim,
             max_n_obs_steps=n_obs_steps,
-            use_first_action=False,
+            use_first_action=True,
             debug=debug,
         )
         
@@ -126,10 +117,14 @@ class Coarse_DP3(BaseImagePolicy):
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
-
+        
+        self.reset()
 
         
     # ========= inference  ============
+    def reset(self):
+        pass
+    
     def conditional_sample(self, 
             condition_data, condition_mask,
             condition_data_pc=None, condition_mask_pc=None,
@@ -181,7 +176,6 @@ class Coarse_DP3(BaseImagePolicy):
         # finally make sure conditioning is enforced
         trajectory[condition_mask] = condition_data[condition_mask]   
 
-
         return trajectory
 
 
@@ -192,15 +186,12 @@ class Coarse_DP3(BaseImagePolicy):
         
         """
         # normalize input
-        if self.debug:
-            cprint(f"[DP3 Predict_action] obs_dict keys: {obs_dict.keys()}", "yellow")
-            for k, v in obs_dict.items():
-                cprint(f"[DP3 Predict_action] obs_dict[{k}]: {v.shape}", "yellow")
         nobs = self.normalizer.normalize(obs_dict)
-        # this_n_point_cloud = nobs['imagin_robot'][..., :3] # only use coordinate
+        if pre_action is not None:
+            pre_action = self.normalizer['action'].normalize(pre_action)
+
         if not self.use_pc_color:
             nobs['pointcloud'] = nobs['pointcloud'][..., :3]
-        this_n_point_cloud = nobs['pointcloud']
         
         value = next(iter(nobs.values()))
         B, To = value.shape[:2] # B：批次大小
@@ -233,7 +224,7 @@ class Coarse_DP3(BaseImagePolicy):
                 cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
                 cond_data[:,:To,...] = nobs['agent_pos'][:,:To,...]
             else:
-                cond_data = self.normalizer['action'].normalize(pre_action)
+                cond_data = pre_action
             cond_mask = self.mask_generator(cond_data.shape, history_idxs=history_idxs, device=device)
         else:
             # condition through impainting
@@ -256,7 +247,6 @@ class Coarse_DP3(BaseImagePolicy):
             **self.kwargs)
         
         # unnormalize prediction 
-        # 解归一化
         naction_pred = nsample[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
@@ -264,22 +254,11 @@ class Coarse_DP3(BaseImagePolicy):
         start = To - 1
         end = start + self.n_action_steps
         action = action_pred[:,start:end]
-        if self.debug:
-            cprint(f"[DP3 Predict_action] start: {start}, end: {end}", "yellow")
-            cprint(f"[DP3 Predict_action] To(n_obs_steps):{To}, n_action_steps: {self.n_action_steps}", "yellow")
-        # get prediction
-
 
         result = {
             'action': action,
             'action_pred': action_pred,
         }
-        if self.debug:
-            cprint(f"[DP3 Predict_action] action shape: {action.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] action_pred shape: {action_pred.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] nsample shape: {nsample.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] nobs shape: {nobs['pointcloud'].shape}", "yellow")
-            cprint(f"[DP3 Predict_action] result_action shape: {result['action'].shape}", "yellow")
 
         return result
 
@@ -300,15 +279,6 @@ class Coarse_DP3(BaseImagePolicy):
         
         """
         
-        if self.debug:
-            for k, v in batch.items():
-                cprint(f"[DP3 compute_loss] batch[{k}]: type={type(v)}", "yellow")
-                if k == "obs":
-                    for k1, v1 in v.items():
-                        cprint(f"[DP3 compute_loss] batch[{k}][{k1}]: {v1.shape}", "yellow")
-                if k == "action":
-                    cprint(f"[DP3 compute_loss] batch[{k}]: {v.shape}", "yellow")
-
         # normalize input
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
@@ -364,12 +334,10 @@ class Coarse_DP3(BaseImagePolicy):
         #timesteps需不需要乘上self.horizon_internal？ 学长曰：不需要
 
         # Add noise to the clean images according to the noise magnitude at each timestep
-        # (this is the forward diffusion process)
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps)
         noisy_trajectory[condition_mask] = trajectory[condition_mask]
 
         pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=history_idxs)
-        # 预测下一时间步的动作。实际上相当于trajectory中每一项t都变成t+1。
 
         # compute loss mask
         loss_mask = torch.zeros_like(condition_mask, dtype=torch.bool)
@@ -407,17 +375,95 @@ class Coarse_DP3(BaseImagePolicy):
                 'mse_loss': mse_loss.mean().item(),
             }
 
+        return loss, loss_dict
+    
+    def compute_loss_2(self, obs_dict, trajectory, history_idxs, pre_action=None):
+        # normalize input
+        nobs = self.normalizer.normalize(obs_dict)
+        trajectory = self.normalizer['action'].normalize(trajectory)
+        if pre_action is not None:
+            pre_action = self.normalizer['action'].normalize(pre_action)
 
-        if self.debug:
-            cprint(f"[DP3 Compute_loss] loss: {loss.item()}", "yellow")
+        if not self.use_pc_color:
+            nobs['pointcloud'] = nobs['pointcloud'][..., :3]
+        
+        batch_size = trajectory.shape[0]
+        horizon = trajectory.shape[1]
+        To = self.n_obs_steps
 
-            for k, v in nobs.items():
-                cprint(f"[DP3 Compute_loss] nobs[{k}]: {v.shape}", "yellow")
-            cprint(f"[DP3 Compute_loss] nactions shape: {nactions.shape}", "yellow")
-            cprint(f"[DP3 Compute_loss] condition_mask_size: {condition_mask.shape}", "yellow")
-            cprint(f"[DP3 Compute_loss] noisy_trajectory: {noisy_trajectory.shape}", "yellow")
-            cprint(f"[DP3 Compute_loss] pred: {pred.shape}", "yellow")
-            cprint(f"[DP3 Compute_loss] target: {target.shape}", "yellow")
+        global_cond = None
+        if self.obs_as_global_cond:
+            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            nobs_features = self.obs_encoder(this_nobs) #使用obs_encoder对obs进行编码，变成点云
+            if "cross_attention" in self.condition_type:
+                # Transformer时，把nobs_features处理为序列输入
+                global_cond = nobs_features.reshape(batch_size, self.n_obs_steps, -1)
+            else:
+                # CNN时，把nobs_features处理为特征图 Batch_size x dim_obs
+                global_cond = nobs_features.reshape(batch_size, -1)
+        else:
+            raise NotImplementedError("Not implemented obs_as_global_cond=False")
+        
+        # condition_mask提取当前时刻之前的trajectory
+        condition_mask = self.mask_generator(trajectory.shape, history_idxs=history_idxs, device=self.device)
 
+        # Sample noise that we'll add to the images
+        noise = torch.randn(trajectory.shape, device=trajectory.device)
+
+        bsz = trajectory.shape[0] # 也是batch_size
+        device=trajectory.device
+
+        # 采样一个随机时间步timesteps，然后给trajectory加timesteps步的噪声。
+        # 随机是因为实际中可能每个图像的噪声的程度不同，所以需要随机采样，以训练模型对于噪声强度的泛化能力。
+        timesteps = torch.randint(
+            0, self.noise_scheduler.config.num_train_timesteps, 
+            (bsz,), device=device
+        ).long()
+
+
+        # Add noise to the clean images according to the noise magnitude at each timestep
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps)
+        if pre_action is not None:
+            # self-forcing，把上一轮生成的动作作为输入。
+            noisy_trajectory[condition_mask] = pre_action[condition_mask]
+        else:
+            noisy_trajectory[condition_mask] = trajectory[condition_mask]
+            # pass
+
+        pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=history_idxs)
+
+        # compute loss mask
+        loss_mask = torch.zeros_like(condition_mask, dtype=torch.bool)
+        loss_mask = ~loss_mask # 设置loss_mask全为True
+
+        pred_type = self.noise_scheduler.config.prediction_type 
+        if pred_type == 'epsilon':
+            target = noise
+        elif pred_type == 'sample':
+            target = trajectory
+        else:
+            raise ValueError(f"Unsupported prediction type {pred_type}")
+        
+        mse_loss = F.mse_loss(pred, target, reduction='none')
+
+        loss = mse_loss * loss_mask.type(mse_loss.dtype)
+        
+        loss = reduce(loss, 'b ... -> b (...)', 'mean')
+        loss = loss.mean()
+        
+        # unnormalize prediction 
+        action_pred = self.normalizer['action'].unnormalize(pred)
+
+        # get action
+        start = 0
+        end = start + self.n_action_steps
+        action = action_pred[:,start:end]
+        
+        loss_dict = {
+                'pred': pred,
+                'loss': loss.item(),
+                'mse_loss': mse_loss.mean().item(),
+                'action': action,
+            }
 
         return loss, loss_dict

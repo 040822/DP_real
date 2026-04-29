@@ -1,19 +1,19 @@
 from typing import Dict
 import torch
 import torch.nn.functional as F
-from einops import rearrange, reduce
+from einops import reduce
 from diffusers.schedulers.scheduling_ddpm import DDPMScheduler
 from termcolor import cprint
 import copy
 
 from source.model.common.normalizer import LinearNormalizer
 from source.policy.base_policy import BasePolicy, BaseImagePolicy
-from source.model.DDP3.mask_generator import LowdimMaskGenerator
+from source.model.DDP2.mask_generator import CoarseMaskGenerator
 from source.common.pytorch_util import dict_apply
-from source.model.DDP3.pointnet_extractor import DP3Encoder
-from source.model.DDP3.editable_diffusion import EditableDiffusion
+from source.model.DDP2.pointnet_extractor import DP3Encoder
+from source.model.DDP2.editable_diffusion import EditableDiffusion
 
-class Fine_DP3(BaseImagePolicy):
+class Coarse_DP2(BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,
@@ -93,20 +93,16 @@ class Fine_DP3(BaseImagePolicy):
             debug=debug,
         )
         
-
         self.obs_encoder = obs_encoder
         self.model = model
         self.noise_scheduler = noise_scheduler
-        # DDPM scheduler 相当于denoise(采样器）
-        
         
         self.noise_scheduler_pc = copy.deepcopy(noise_scheduler)
-        self.mask_generator = LowdimMaskGenerator(
+        self.mask_generator = CoarseMaskGenerator(
             action_dim=action_dim,
-            obs_dim=0 if obs_as_global_cond else obs_feature_dim,
             max_n_obs_steps=n_obs_steps,
-            fix_obs_steps=True,
-            action_visible=False
+            use_first_action=True,
+            debug=debug,
         )
         
         self.normalizer = LinearNormalizer()
@@ -121,9 +117,14 @@ class Fine_DP3(BaseImagePolicy):
         if num_inference_steps is None:
             num_inference_steps = noise_scheduler.config.num_train_timesteps
         self.num_inference_steps = num_inference_steps
+        
+        self.reset()
 
         
     # ========= inference  ============
+    def reset(self):
+        pass
+    
     def conditional_sample(self, 
             condition_data, condition_mask,
             condition_data_pc=None, condition_mask_pc=None,
@@ -158,12 +159,10 @@ class Fine_DP3(BaseImagePolicy):
 
         for t in scheduler.timesteps:
             # 1. apply conditioning 
+            # 把当前时刻之前的替换为真实trajectory，因为是真实的所以不用噪声。
             trajectory[condition_mask] = condition_data[condition_mask]
 
             # 2. 根据cond，对noise action(trajectory)进行预处理。
-            # model_output = model(sample=trajectory,
-            #                     timestep=t, 
-            #                     local_cond=local_cond, global_cond=global_cond)
             model_output = model(sample=trajectory,
                                  timestep=t, 
                                  cond=global_cond,
@@ -173,26 +172,24 @@ class Fine_DP3(BaseImagePolicy):
             trajectory = scheduler.step(
                 model_output, t, trajectory, ).prev_sample
             
+                
         # finally make sure conditioning is enforced
         trajectory[condition_mask] = condition_data[condition_mask]   
-
 
         return trajectory
 
 
-    def predict_action(self, obs_dict: Dict[str, torch.Tensor], pre_action=None, act_position=None) -> Dict[str, torch.Tensor]:
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor], pre_action=None, history_idxs=None) -> Dict[str, torch.Tensor]:
         """
         obs_dict: must include "obs" key
         result: must include "action" key
         
         """
         # normalize input
-        if self.debug:
-            cprint(f"[DP3 Predict_action] obs_dict keys: {obs_dict.keys()}", "yellow")
-            for k, v in obs_dict.items():
-                cprint(f"[DP3 Predict_action] obs_dict[{k}]: {v.shape}", "yellow")
         nobs = self.normalizer.normalize(obs_dict)
-        # this_n_point_cloud = nobs['imagin_robot'][..., :3] # only use coordinate
+        if pre_action is not None:
+            pre_action = self.normalizer['action'].normalize(pre_action)
+
         if not self.use_pc_color:
             nobs['pointcloud'] = nobs['pointcloud'][..., :3]
         
@@ -225,14 +222,20 @@ class Fine_DP3(BaseImagePolicy):
             
             if pre_action is None:
                 cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
-                cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
+                cond_data[:,:To,...] = nobs['agent_pos'][:,:To,...]
             else:
-                cond_data = self.normalizer['action'].normalize(pre_action)
-                cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-                cond_mask[:, 1, :] = True
-                cond_mask[:, -1, :] = True
+                cond_data = pre_action
+            cond_mask = self.mask_generator(cond_data.shape, history_idxs=history_idxs, device=device)
         else:
-            raise NotImplementedError("Not implemented obs_as_global_cond=False")
+            # condition through impainting
+            this_nobs = dict_apply(nobs, lambda x: x[:,:To,...].reshape(-1,*x.shape[2:]))
+            nobs_features = self.obs_encoder(this_nobs)
+            # reshape back to B, T, Do
+            nobs_features = nobs_features.reshape(B, To, -1)
+            cond_data = torch.zeros(size=(B, T, Da+Do), device=device, dtype=dtype)
+            cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
+            cond_data[:,:To,Da:] = nobs_features
+            cond_mask[:,:To,Da:] = True
 
         # run sampling 丢给模型进行采样
         nsample = self.conditional_sample(
@@ -240,33 +243,22 @@ class Fine_DP3(BaseImagePolicy):
             cond_mask,
             local_cond=local_cond, # local_cond = None
             global_cond=global_cond,
-            act_position=act_position, # act_position = None
+            act_position=history_idxs,
             **self.kwargs)
         
         # unnormalize prediction 
-        # 解归一化
         naction_pred = nsample[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
-        start = To - 1 # 1
-        end = start + self.n_action_steps + 1 #10 ，start对应的是coarse DP的动作，Fine DP本身预测8步，因此一共是9步
-        action = action_pred[:,start:end] # 1~9
-        if self.debug:
-            cprint(f"[DP3 Predict_action] start: {start}, end: {end}", "yellow")
-            cprint(f"[DP3 Predict_action] To(n_obs_steps):{To}, n_action_steps: {self.n_action_steps}", "yellow")
-        # get prediction
-
+        start = To - 1
+        end = start + self.n_action_steps
+        action = action_pred[:,start:end]
 
         result = {
             'action': action,
             'action_pred': action_pred,
         }
-        if self.debug:
-            cprint(f"[DP3 Predict_action] action shape: {action.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] action_pred shape: {action_pred.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] nsample shape: {nsample.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] nobs shape: {nobs['pointcloud'].shape}", "yellow")
 
         return result
 
@@ -275,7 +267,7 @@ class Fine_DP3(BaseImagePolicy):
         # normalized_data = (data - mean) / std
         self.normalizer.load_state_dict(normalizer.state_dict())
 
-    def compute_loss(self, batch, pre_action=None, act_position=None):
+    def compute_loss(self, batch, history_idxs=None):
         """
         1. normalize input
         2. obs => condition 使用 self.obs_encoder 
@@ -286,7 +278,7 @@ class Fine_DP3(BaseImagePolicy):
         7. return loss and loss_dict
         
         """
-
+        
         # normalize input
         nobs = self.normalizer.normalize(batch['obs'])
         nactions = self.normalizer['action'].normalize(batch['action'])
@@ -298,25 +290,18 @@ class Fine_DP3(BaseImagePolicy):
         horizon = nactions.shape[1]
 
         # handle different ways of passing observation
-        local_cond = None
         global_cond = None
         trajectory = nactions
-        cond_data = trajectory
         
         # 把obs处理为condition
+        batch_indices = torch.arange(batch_size)
+        
         if self.obs_as_global_cond:
             # reshape B, T, ... to B*T
-            this_nobs = dict_apply(nobs, 
-                lambda x: x[:,:self.n_obs_steps,...].reshape(-1,*x.shape[2:]))
-            if self.debug:
-                print(f"[DP3 compute_loss] self.n_obs_steps: {self.n_obs_steps}")
-                for k, v in this_nobs.items():
-                    cprint(f"[DP3 compute_loss] this_nobs[{k}]: {v.shape}", "yellow")
-        
+            # 将两个观测obs给拼接起来。 TODO:逻辑比较复杂，需要检查有没有错误。 
+            this_nobs = dict_apply(nobs, lambda x: torch.stack([x[:, 0, ...],x[batch_indices, history_idxs, ...]], dim=1).reshape(-1, *x.shape[2:])) 
             nobs_features = self.obs_encoder(this_nobs) #使用obs_encoder对obs进行编码，变成点云
-            if self.debug:
-                cprint(f"[DP3 compute_loss] nobs_features shape: {nobs_features.shape}", "yellow")
-                
+
             if "cross_attention" in self.condition_type:
                 # treat as a sequence 
                 # Transformer时，把nobs_features处理为序列输入
@@ -325,53 +310,38 @@ class Fine_DP3(BaseImagePolicy):
                 # reshape back to B, Do
                 # CNN时，把nobs_features处理为特征图 Batch_size x dim_obs
                 global_cond = nobs_features.reshape(batch_size, -1)
-            # this_n_point_cloud = this_nobs['imagin_robot'].reshape(batch_size,-1, *this_nobs['imagin_robot'].shape[1:])
-            
-            #？
-            this_n_point_cloud = this_nobs['pointcloud'].reshape(batch_size,-1, *this_nobs['pointcloud'].shape[1:])
-            this_n_point_cloud = this_n_point_cloud[..., :3] # TODO:在compute_loss中没用到？
+
         else:
             raise NotImplementedError("Not implemented obs_as_global_cond=False")
 
-
         # generate impainting mask
-        condition_mask = self.mask_generator(trajectory.shape, device=self.device)
+        # condition_mask提取当前时刻之前的trajectory
+        condition_mask = self.mask_generator(trajectory.shape, history_idxs=history_idxs, device=self.device)
 
         # Sample noise that we'll add to the images
         noise = torch.randn(trajectory.shape, device=trajectory.device)
 
         bsz = trajectory.shape[0] # 也是batch_size
+        device=trajectory.device
         # Sample a random timestep for each image
         # 采样一个随机时间步timesteps，然后给trajectory加timesteps步的噪声。
         # 随机是因为实际中可能每个图像的噪声的程度不同，所以需要随机采样，以训练模型对于噪声强度的泛化能力。
         timesteps = torch.randint(
             0, self.noise_scheduler.config.num_train_timesteps, 
-            (bsz,), device=trajectory.device
+            (bsz,), device=device
         ).long()
         
         #timesteps需不需要乘上self.horizon_internal？ 学长曰：不需要
 
         # Add noise to the clean images according to the noise magnitude at each timestep
-        # (this is the forward diffusion process)
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps)
+        noisy_trajectory[condition_mask] = trajectory[condition_mask]
 
-        # apply conditioning
-        # 把当前时刻之前的替换为真实trajectory，因为是真实的所以不用噪声。
-        # noisy_trajectory前边的是真实数据，后边的是噪声数据，需要处理。
-        noisy_trajectory[condition_mask] = cond_data[condition_mask]
-        if pre_action is not None:
-            noisy_trajectory[:, 1, :] = pre_action[:, 1, :]
-            noisy_trajectory[:, -1, :] = pre_action[:, -1, :]
-
-        if self.debug:
-            cprint(f"[DP3 Compute_loss] timesteps: {timesteps}", "yellow")
-            cprint(f"[DP3 Compute_loss] timesteps shape: {timesteps.shape}", "yellow")
-
-        pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=act_position)
-        # 预测下一时间步的动作。实际上相当于trajectory中每一项t都变成t+1。
+        pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=history_idxs)
 
         # compute loss mask
-        loss_mask = ~condition_mask
+        loss_mask = torch.zeros_like(condition_mask, dtype=torch.bool)
+        loss_mask = ~loss_mask # 设置loss_mask全为True
 
         pred_type = self.noise_scheduler.config.prediction_type 
         if pred_type == 'epsilon':
@@ -393,19 +363,21 @@ class Fine_DP3(BaseImagePolicy):
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
         
-        loss = F.mse_loss(pred, target, reduction='none')
-        loss = loss * loss_mask.type(loss.dtype)
+        mse_loss = F.mse_loss(pred, target, reduction='none')
+
+        loss = mse_loss * loss_mask.type(mse_loss.dtype)
+        
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
-        
-
         loss_dict = {
-            'loss': loss.item(),
-        }
+                'pred': pred,
+                'loss': loss.item(),
+                'mse_loss': mse_loss.mean().item(),
+            }
 
         return loss, loss_dict
-
-    def compute_loss_2(self, obs_dict, trajectory, pre_action=None, act_position=None):
+    
+    def compute_loss_2(self, obs_dict, trajectory, history_idxs, pre_action=None):
         # normalize input
         nobs = self.normalizer.normalize(obs_dict)
         trajectory = self.normalizer['action'].normalize(trajectory)
@@ -433,7 +405,7 @@ class Fine_DP3(BaseImagePolicy):
             raise NotImplementedError("Not implemented obs_as_global_cond=False")
         
         # condition_mask提取当前时刻之前的trajectory
-        condition_mask = self.mask_generator(trajectory.shape, device=self.device)
+        condition_mask = self.mask_generator(trajectory.shape, history_idxs=history_idxs, device=self.device)
 
         # Sample noise that we'll add to the images
         noise = torch.randn(trajectory.shape, device=trajectory.device)
@@ -450,15 +422,15 @@ class Fine_DP3(BaseImagePolicy):
 
 
         # Add noise to the clean images according to the noise magnitude at each timestep
-        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps) # 全False
-        
-        # 设置cond
-        noisy_trajectory[condition_mask] = trajectory[condition_mask]
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps)
         if pre_action is not None:
-            noisy_trajectory[:, 1, :] = pre_action[:, 1, :]
-            noisy_trajectory[:, -1, :] = pre_action[:, -1, :]
+            # self-forcing，把上一轮生成的动作作为输入。
+            noisy_trajectory[condition_mask] = pre_action[condition_mask]
+        else:
+            noisy_trajectory[condition_mask] = trajectory[condition_mask]
+            # pass
 
-        pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=act_position)
+        pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=history_idxs)
 
         # compute loss mask
         loss_mask = torch.zeros_like(condition_mask, dtype=torch.bool)
@@ -478,11 +450,20 @@ class Fine_DP3(BaseImagePolicy):
         
         loss = reduce(loss, 'b ... -> b (...)', 'mean')
         loss = loss.mean()
+        
+        # unnormalize prediction 
+        action_pred = self.normalizer['action'].unnormalize(pred)
+
+        # get action
+        start = 0
+        end = start + self.n_action_steps
+        action = action_pred[:,start:end]
+        
         loss_dict = {
                 'pred': pred,
                 'loss': loss.item(),
                 'mse_loss': mse_loss.mean().item(),
+                'action': action,
             }
+
         return loss, loss_dict
-
-

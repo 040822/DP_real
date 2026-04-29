@@ -6,6 +6,7 @@ name: ${task.name}
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 policy_name: DP2
+info: 
 
 seed: 42
 
@@ -31,7 +32,7 @@ policy:
     beta_schedule: squaredcos_cap_v2
     variance_type: fixed_small # Yilun's paper uses fixed_small_log instead, but easy to cause Nan
     clip_sample: True # required when predict_epsilon=False
-    prediction_type: sample # or sample
+    prediction_type: epsilon # or sample
 
   obs_encoder:
     _target_: source.model.DP2.multi_image_obs_encoder.MultiImageObsEncoder
@@ -68,24 +69,23 @@ policy:
   # predict_epsilon: True
 
 ema:
-  update_after_steps: 0
+  decay: 0.9
+  update_every_n_steps: 1
+
 
 dataloader:
   train:
-    # batch_size: 128
-    # num_workers: 8
-    batch_size: 32
-    num_workers: 2
+    batch_size: 128
+    num_workers: 4
     shuffle: True
     pin_memory: True
     persistent_workers: True
   val:
-    # batch_size: 128
-    # num_workers: 8
-    batch_size: 32
-    num_workers: 2
+    batch_size: 128
+    num_workers: 4
     shuffle: False
     pin_memory: True
+    persistent_workers: True
 
 optimizer:
   lr: 1.0e-4
@@ -101,20 +101,20 @@ checkpoint:
   _target_: lightning.pytorch.callbacks.ModelCheckpoint
   monitor: val/loss
   mode: min
-  save_top_k: 1
+  save_top_k: 5
   save_last: True
   save_weights_only: False
-  every_n_epochs: ${trainer.check_val_every_n_epoch}
+  every_n_epochs: 100
   save_on_train_epoch_end: False
   filename: 'epoch={epoch:0>3d}-loss={val/loss:.4f}'
   auto_insert_metric_name: False
 
 trainer:
-  max_epochs: 300
+  max_epochs: 500
   accelerator: auto
   devices: 1
   precision: 32
-  check_val_every_n_epoch: 1000
+  check_val_every_n_epoch: 1
   enable_progress_bar: True
   profiler: "simple"
   
@@ -126,8 +126,8 @@ training: # 用于存放trainer没有的参数
 logging:
   project: DP_real
   group: ${policy_name}_${task_name}
-  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}
-  mode: offline
+  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}_${info}
+  mode: online
   tags: ["${task_name}", "${policy_name}"]
 
 

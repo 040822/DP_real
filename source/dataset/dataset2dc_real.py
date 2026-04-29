@@ -4,7 +4,7 @@ import numpy as np
 from torch.utils.data import Dataset
 
 from source.common.sampler import create_indices
-from source.model.common.normalizer import LinearNormalizer
+from source.model.common.normalizer import LinearNormalizer, SingleFieldLinearNormalizer
 from source.common.normalize_util import get_identity_normalizer_from_stat
 
 
@@ -48,6 +48,13 @@ class Dataset2D(Dataset):
         return len(self.indices)
     
     def padding(self, data: np.ndarray, start_idx: int, end_idx: int) -> np.ndarray:
+        """
+        对数据进行填充，确保数据长度为指定的范围。
+        :param data: 输入数据
+        :param start_idx: 起始索引
+        :param end_idx: 结束索引
+        :return: 填充后的数据
+        """
         if start_idx > 0:
             data[:start_idx] = data[start_idx]
         if end_idx < self.horizon:
@@ -68,25 +75,8 @@ class Dataset2D(Dataset):
         
         for key in self.input_meta["obs"].keys():
             if key.startswith("cam"):
-                normalizer[key] = get_identity_normalizer_from_stat(
-                    stat={
-                        'min': np.array([0], dtype=np.float32),
-                        'max': np.array([255], dtype=np.float32),
-                        'mean': np.array([127.5], dtype=np.float32),
-                        'std': np.array([73.90027], dtype=np.float32)
-                    }
-                )
-                normalizer[key].params_dict['scale'].data[:] = 2.0 / 255.0
-                normalizer[key].params_dict['offset'].data[:] = -1.0
-            elif key.startswith("gaussian"):
-                normalizer[key] = get_identity_normalizer_from_stat(
-                    stat = {
-                        'min': np.array([-1], dtype=np.float32),
-                        'max': np.array([1], dtype=np.float32),
-                        'mean': np.array([0], dtype=np.float32),
-                        'std': np.array([1], dtype=np.float32)
-                    }
-                )
+                normalizer[key] = SingleFieldLinearNormalizer.create_identity()
+
         self._normalizer = normalizer
         return self._normalizer
     

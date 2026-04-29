@@ -8,12 +8,12 @@ import copy
 
 from source.model.common.normalizer import LinearNormalizer
 from source.policy.base_policy import BasePolicy, BaseImagePolicy
-from source.model.DDP3.mask_generator import LowdimMaskGenerator
+from source.model.DDP2.mask_generator import LowdimMaskGenerator
 from source.common.pytorch_util import dict_apply
-from source.model.DDP3.pointnet_extractor import DP3Encoder
-from source.model.DDP3.editable_diffusion import EditableDiffusion
+from source.model.DDP2.pointnet_extractor import DP3Encoder
+from source.model.DDP2.editable_diffusion import EditableDiffusion
 
-class Fine_DP3(BaseImagePolicy):
+class Fine_DP2(BaseImagePolicy):
     def __init__(self, 
             shape_meta: dict,
             noise_scheduler: DDPMScheduler,

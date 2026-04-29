@@ -1,0 +1,179 @@
+defaults:
+  - _self_
+  - task: default_task
+
+name: ${task.name}
+task_name: ${task.name}
+shape_meta: ${task.shape_meta}
+policy_name: ACT
+info: 
+
+seed: 42
+horizon: 100
+n_obs_steps: 1
+n_history_steps: 0
+n_action_steps: 100
+n_latency_steps: 0
+dataset_obs_steps: ${n_obs_steps}
+dataset_history_steps: ${n_history_steps}
+
+past_action_visible: False
+keypoint_visible_rate: 1.0
+
+# act parameter
+chunk_size: ${horizon}
+kl_weight: 10
+hidden_dim: 512
+dim_feedforward: 3200
+enc_layers: 4
+dec_layers: 1
+nheads: 8
+masks: False
+pre_norm: False
+latent_dim: 32
+temporal_agg: False
+temporal_agg_const: 0.01
+obs_mode: rgb
+
+policy:
+  _target_: source.policy.act.ACT
+
+  use_point_crop: true
+
+  optimizer_cfg: ${optimizer}
+  scheduler_cfg: ${lr_scheduler}
+  
+  shape_meta: ${shape_meta}
+  n_obs_steps: ${n_obs_steps}
+  n_action_steps: ${n_action_steps}
+
+  chunk_size: ${chunk_size}
+  hidden_dim: ${hidden_dim}
+  latent_dim: ${latent_dim}
+  kl_weight: ${kl_weight}
+  temporal_agg: ${temporal_agg}
+  temporal_agg_const: ${temporal_agg_const}
+
+  obs_encoder:
+    _target_: source.model.ACT.multi_image_obs_tokens_encoder.MultiImageObsTokensEncoder
+    shape_meta: ${shape_meta}
+    hidden_dim: ${hidden_dim}
+    rgb_model:
+      _target_: source.model.ACT.detr.models.backbone.Joiner
+      backbone: 
+        _target_: source.model.ACT.detr.models.backbone.Backbone
+        name: resnet18
+        train_backbone: True
+        return_interm_layers: ${masks}
+        dilation: False
+        pretrained: True
+      position_embedding:
+        _target_: source.model.ACT.detr.models.position_encoding.build_position_encoding
+        type: sine  # sine | learned
+        N_steps: ${eval:'${hidden_dim}//2'}
+    resize_shape: [128, 128]
+    crop_shape: [120, 120] # ch, cw 240x320 90%
+    random_crop: False
+    use_group_norm: True
+    share_rgb_model: False
+    imagenet_norm: True
+
+  vae_decoder:
+    _target_: source.model.ACT.detr.models.transformer.Transformer
+    num_encoder_layers: ${enc_layers}
+    num_decoder_layers: ${dec_layers}
+    dim_feedforward: ${dim_feedforward}
+    d_model: ${hidden_dim}
+    dropout: 0.05
+    nhead: ${nheads}
+    normalize_before: ${pre_norm}
+    return_intermediate_dec: True
+
+  vae_encoder: 
+    _target_: source.model.ACT.detr.models.transformer.TransformerEncoder
+    encoder_layer:
+      _target_: source.model.ACT.detr.models.transformer.TransformerEncoderLayer
+      d_model: ${hidden_dim}
+      nhead: ${nheads}
+      dim_feedforward: ${dim_feedforward}
+      dropout: 0.05
+      activation: relu
+      normalize_before: ${pre_norm}
+    num_layers: ${enc_layers}
+    norm: null
+
+ema:
+  decay: 0.9
+  update_every_n_steps: 1
+
+dataloader:
+  train:
+    batch_size: 128
+    num_workers: 4
+    shuffle: True
+    pin_memory: True
+    persistent_workers: True
+  val:
+    batch_size: 128
+    num_workers: 4
+    shuffle: False
+    pin_memory: True
+    persistent_workers: True
+
+
+optimizer:
+  lr: 1e-5
+  betas: [0.95, 0.999]
+  eps: 1.0e-8
+  weight_decay: 1.0e-4
+
+lr_scheduler:
+  scheduler: cosine
+  warmup_steps: 500
+  
+checkpoint:
+  _target_: lightning.pytorch.callbacks.ModelCheckpoint
+  monitor: val/loss
+  mode: min
+  save_top_k: 5
+  save_last: True
+  save_weights_only: False
+  every_n_epochs: 100
+  save_on_train_epoch_end: False
+  filename: 'epoch={epoch:0>3d}-loss={val/loss:.4f}'
+  auto_insert_metric_name: False
+
+trainer:
+  max_epochs: 500
+  accelerator: auto
+  devices: 1
+  precision: 32
+  check_val_every_n_epoch: 1
+  enable_progress_bar: True
+  profiler: "simple"
+  
+training: # 用于存放trainer没有的参数
+  debug: False
+  seed: ${seed}
+  progress_bar_refresh_rate: 10
+
+logging:
+  project: DP_real
+  group: ${policy_name}_${task_name}
+  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}_${info}
+  mode: online
+  tags: ["${task_name}", "${policy_name}"]
+
+
+multi_run:
+  run_dir:  _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
+
+hydra:
+  job:
+    override_dirname: ${name}
+  run:
+    dir: _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
+  sweep:
+    dir: _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
+    subdir: ${hydra.job.num}

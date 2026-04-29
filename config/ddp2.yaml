@@ -6,12 +6,13 @@ name: ${task.name}
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 policy_name: DDP2
+info: 
 
 seed: 42
 
 # coarse和fine单独设置
 coarse_horizon: 7
-internal: 14
+internal: 4
 
 
 horizon: -1
@@ -58,7 +59,7 @@ policy:
       prediction_type: sample
     
     obs_encoder:
-      _target_: model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+      _target_: source.model.DDP2.multi_image_obs_encoder.MultiImageObsEncoder
       shape_meta: ${shape_meta}
       rgb_model:
         _target_: model.vision.model_getter.get_resnet
@@ -105,7 +106,7 @@ policy:
       prediction_type: sample
 
     obs_encoder:
-      _target_: model.vision.multi_image_obs_encoder.MultiImageObsEncoder
+      _target_: source.model.DDP2.multi_image_obs_encoder.MultiImageObsEncoder
       shape_meta: ${shape_meta}
       rgb_model:
         _target_: model.vision.model_getter.get_resnet
@@ -129,19 +130,22 @@ policy:
 
 
 ema:
-  update_after_steps: 0
+  decay: 0.99
+  update_every_n_steps: 1
 
 dataloader:
   train:
-    batch_size: 32
-    num_workers: 8
+    batch_size: 128
+    num_workers: 4
     shuffle: True
     pin_memory: True
+    persistent_workers: True
   val:
-    batch_size: 32
-    num_workers: 8
+    batch_size: 128
+    num_workers: 4
     shuffle: False
     pin_memory: True
+    persistent_workers: True
 
 optimizer:
   transformer_weight_decay: 1.0e-3
@@ -155,17 +159,14 @@ lr_scheduler:
 
 checkpoint:
   _target_: lightning.pytorch.callbacks.ModelCheckpoint
-  monitor: train/loss
-  # monitor: rollout/success_rate
+  monitor: val/loss
   mode: min
-  # mode: max
-  save_top_k: 1
+  save_top_k: 5
   save_last: True
   save_weights_only: False
-  every_n_epochs: ${trainer.check_val_every_n_epoch}
+  every_n_epochs: 100
   save_on_train_epoch_end: False
-  filename: 'epoch={epoch:0>3d}-loss={train/loss:.4f}'
-  # filename: 'epoch={epoch:0>3d}-success_rate={rollout/success_rate:.4f}.ckpt'
+  filename: 'epoch={epoch:0>3d}-loss={val/loss:.4f}'
   auto_insert_metric_name: False
 
 trainer:
@@ -187,13 +188,13 @@ training: # 用于存放trainer没有的参数
 logging:
   project: DP_real
   group: ${policy_name}_${task_name}
-  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}
+  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}_${info}
   mode: online
   tags: ["${task_name}", "${policy_name}"]
 
 multi_run:
-  run_dir:  _outputs/${policy_name}/${task_name}/${now:%Y.%m.%d.%H.%M.%S}
-  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${task_name}
+  run_dir: _outputs/${now:%Y.%m.%d}/${now:%H.%M.%S}_${name}_${task_name}
+  wandb_name_base: ${now:%Y.%m.%d-%H.%M.%S}_${name}_${task_name}
 
 hydra:
   job:
