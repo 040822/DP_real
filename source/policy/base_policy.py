@@ -10,6 +10,27 @@ from source.model.common.normalizer import LinearNormalizer
 from source.model.common.lr_scheduler import get_scheduler
 from source.model.common.module_attr_mixin import ModuleAttrMixin
 
+class BaseImagePolicy(ModuleAttrMixin):
+    # init accepts keyword argument shape_meta, see config/task/*_image.yaml
+
+    def predict_action(self, obs_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Tensor]:
+        """
+        obs_dict:
+            str: B,To,*
+        return: B,Ta,Da
+        """
+        raise NotImplementedError()
+
+    # reset state for stateful policies
+    def reset(self):
+        pass
+
+    # ========== training ===========
+    # no standard training interface except setting normalizer
+    def set_normalizer(self, normalizer: LinearNormalizer):
+        raise NotImplementedError()
+
+
 class BasePolicy(LightningModule):
     def __init__(self,
             optimizer_cfg: DictConfig = None,
@@ -74,6 +95,7 @@ class BasePolicy(LightningModule):
         obs_dict = batch['obs']
         gt_action = batch['action']
         
+        self.reset() # predict_action之前运行一次reset，以清除状态
         result = self.predict_action(obs_dict)
         pred_action = result['action_pred'] if 'action_pred' in result else result['action']
         mse = F.mse_loss(pred_action, gt_action)

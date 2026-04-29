@@ -35,7 +35,7 @@ scheduler:
   train_script: "train.sh"
 
   # 显存调度阈值：每 mem_per_task_gb 空闲显存允许启动1个任务
-  mem_per_task_gb: 25
+  mem_per_task_gb: 40
 
   # 调度轮询间隔（秒），用于检查GPU显存和启动新任务。尽量设置得较大一些，避免频繁检查和启动任务导致的命令冲突或资源占用峰值过高。如果设置得过小，可能会导致多个任务同时启动，尤其是在训练初期显存占用较低的时候。
   poll_interval: 600
@@ -71,6 +71,6 @@ defaults:
   #   - "dataloader.batch_size=64"
 
 tasks:
-    - policy_name: [act, dp2, ddp2]
-    - task_name: [collecting_objects, stacking_playing_card]
-      seed: [42]
+  - policy_name: [act, dp2, ddp2]
+    task_name: [collecting_objects, stacking_playing_card]
+    seed: [42]

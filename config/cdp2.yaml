@@ -6,6 +6,7 @@ name: ${task.name}
 task_name: ${task.name}
 shape_meta: ${task.shape_meta}
 policy_name: CDP2
+info: 
 
 seed: 42
 
@@ -115,11 +116,13 @@ dataloader:
     num_workers: 8
     shuffle: True
     pin_memory: True
+    persistent_workers: True
   val:
     batch_size: 4
     num_workers: 8
     shuffle: False
     pin_memory: True
+    persistent_workers: True
 
 optimizer:
   transformer_weight_decay: 1.0e-3
@@ -160,7 +163,7 @@ training: # 用于存放trainer没有的参数
 logging:
   project: DP_real
   group: ${policy_name}_${task_name}
-  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}
+  name: ${policy_name}_${task_name}_${now:%Y.%m.%d-%H.%M.%S}_${info}
   mode: offline
   tags: ["${task_name}", "${policy_name}"]
 

@@ -9,13 +9,13 @@ from omegaconf import DictConfig
 from lightning.pytorch import LightningModule
 from scipy.interpolate import interp1d, CubicSpline
 from scipy.linalg import block_diag
-from source.policy.ddp3_fine import Fine_DP3
-from source.policy.ddp3_coarse import Coarse_DP3
+from source.policy.ddp2_fine import Fine_DP2
+from source.policy.ddp2_coarse import Coarse_DP2
 from source.common.pytorch_util import dict_apply
 from source.model.common.lr_scheduler import get_scheduler
 from source.model.common.normalizer import LinearNormalizer
 
-class DDP3(LightningModule):
+class DDP2(LightningModule):
     """
     Double_DP3 是一个分层策略类，结合了粗粒度扩散策略（coarse_dp）和细粒度扩散策略（fine_dp），用于三维环境中的序列决策。
     参数:
@@ -67,8 +67,8 @@ class DDP3(LightningModule):
             scheduler_cfg: DictConfig,
             num_epochs_coarse: int,
 
-            coarse_dp: Coarse_DP3,
-            fine_dp: Fine_DP3,
+            coarse_dp: Coarse_DP2,
+            fine_dp: Fine_DP2,
             debug: bool = False,
             **kwargs):
         super().__init__()
@@ -77,8 +77,8 @@ class DDP3(LightningModule):
         self.optimizer_cfg = optimizer_cfg
         self.scheduler_cfg = scheduler_cfg
 
-        self.coarse_dp: Coarse_DP3 = coarse_dp
-        self.fine_dp: Fine_DP3 = fine_dp
+        self.coarse_dp: Coarse_DP2 = coarse_dp
+        self.fine_dp: Fine_DP2 = fine_dp
             
         self.coarse_cache = None
         self.idx = None
