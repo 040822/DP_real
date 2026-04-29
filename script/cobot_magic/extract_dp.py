@@ -155,9 +155,13 @@ def main(dataset_dir: str, output_path: str) -> None:
         )
     
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--dataset_dir", default="/home/wenxin/office/agilex_data/collect_block/aloha_mobile_dummy/", type=str, help="Path to the dataset")
-    parser.add_argument("--output_path", default="/home/wenxin/office/agilex_data/collect_block/collect_block_50.h5", type=str, help="Path to save the output")
-    args = parser.parse_args()
+    # parser = argparse.ArgumentParser()
+    # parser.add_argument("--dataset_dir", default="/home/agilex/wenxin/DP_real/data_pre/collecting_objects", type=str, help="Path to the dataset")
+    # parser.add_argument("--output_path", default="/home/wenxin/office/agilex_data/collect_block/collect_block_50.h5", type=str, help="Path to save the output")
+    # args = parser.parse_args()
+    
+    task_name = "grabbing_rod"
+    dataset_dir = f"/home/agilex/wenxin/DP_real/data_pre/{task_name}/aloha_mobile_dummy/"
+    output_path = f"/home/agilex/wenxin/DP_real/data/{task_name}.h5"
 
-    main(args.dataset_dir, args.output_path)
+    main(dataset_dir, output_path)
