@@ -17,7 +17,9 @@ class Dataset2D(Dataset):
                  input_meta: Union[Dict[str, Any], None]=None,
                  seperate_action: bool=False,
                  episode_mask: Union[np.ndarray, None]=None,
-                 use_mem: bool=False
+                 use_mem: bool=False,
+                 obs_only_n_steps: bool=False,
+                 obs_n_steps: Union[int, None]=None
                  ) -> None:
         
         if use_mem:
@@ -42,6 +44,8 @@ class Dataset2D(Dataset):
         self.separate_action = seperate_action
         self.obs_keys = list(self.input_meta["obs"].keys()) if self.input_meta is not None else []
         self.action_keys = [key for key in self.input_meta.keys() if key.startswith("action")] if self.input_meta is not None else []
+        self.obs_only_n_steps = obs_only_n_steps
+        self.obs_n_steps = obs_n_steps if obs_n_steps is not None else horizon
         self._normalizer = None
 
     def __len__(self):
@@ -55,9 +59,10 @@ class Dataset2D(Dataset):
         :param end_idx: 结束索引
         :return: 填充后的数据
         """
+        total_len = data.shape[0]
         if start_idx > 0:
             data[:start_idx] = data[start_idx]
-        if end_idx < self.horizon:
+        if end_idx < total_len:
             data[end_idx:] = data[end_idx - 1]
 
         return data
@@ -86,7 +91,14 @@ class Dataset2D(Dataset):
         # import pdb; pdb.set_trace()
         for key in self.obs_keys:
             if key.startswith("cam"):
-                obs = self.data[key][buffer_start_idx:buffer_end_idx]
+                if self.obs_only_n_steps:
+                    obs_target_len = self.obs_n_steps
+                    obs_len = min(obs_target_len, sample_end_idx) - sample_start_idx
+                    obs_len = max(1, obs_len)
+                    obs_end_idx = buffer_start_idx + obs_len
+                    obs = self.data[key][buffer_start_idx:obs_end_idx]
+                else:
+                    obs = self.data[key][buffer_start_idx:buffer_end_idx]
                 obs = np.asarray(obs, dtype=np.uint8)
             elif key.startswith("qpos"):
                 obs = self.data[key][buffer_start_idx:buffer_end_idx]
@@ -95,9 +107,17 @@ class Dataset2D(Dataset):
                 obs = self.data[key][buffer_start_idx:buffer_end_idx]
                 obs = np.asarray(obs, dtype=np.float32)
             data_dtype = np.uint8 if key.startswith("cam") else np.float32
-            data = np.zeros((self.horizon, *obs.shape[1:]), dtype=data_dtype)
-            data[sample_start_idx:sample_end_idx] = obs
-            data = self.padding(data, sample_start_idx, sample_end_idx)
+            if key.startswith("cam") and self.obs_only_n_steps:
+                data = np.zeros((self.obs_n_steps, *obs.shape[1:]), dtype=data_dtype)
+            else:
+                data = np.zeros((self.horizon, *obs.shape[1:]), dtype=data_dtype)
+            if key.startswith("cam") and self.obs_only_n_steps:
+                obs_len = obs.shape[0]
+                data[sample_start_idx:sample_start_idx + obs_len] = obs
+                data = self.padding(data, sample_start_idx, sample_start_idx + obs_len)
+            else:
+                data[sample_start_idx:sample_end_idx] = obs
+                data = self.padding(data, sample_start_idx, sample_end_idx)
             res['obs'][key] = data
         for key in self.action_keys:
             action = self.data[key][buffer_start_idx:buffer_end_idx]

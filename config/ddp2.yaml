@@ -23,6 +23,7 @@ dataset_obs_steps: ${n_obs_steps}
 keypoint_visible_rate: 1.0
 obs_as_global_cond: True
 past_action_visible: False
+obs_only_n_steps: False
 
 policy:
   _target_: source.policy.ddp2.DDP2
@@ -62,7 +63,7 @@ policy:
       _target_: source.model.DDP2.multi_image_obs_encoder.MultiImageObsEncoder
       shape_meta: ${shape_meta}
       rgb_model:
-        _target_: model.vision.model_getter.get_resnet
+        _target_: source.model.DDP2.model_getter.get_resnet
         name: resnet18
         weights: null
       resize_shape: null
@@ -109,7 +110,7 @@ policy:
       _target_: source.model.DDP2.multi_image_obs_encoder.MultiImageObsEncoder
       shape_meta: ${shape_meta}
       rgb_model:
-        _target_: model.vision.model_getter.get_resnet
+        _target_: source.model.DDP2.model_getter.get_resnet
         name: resnet18
         weights: null
       resize_shape: null

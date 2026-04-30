@@ -22,6 +22,8 @@ dataset:
   horizon: ${horizon}
   pad_before: ${eval:'${n_obs_steps}-1'}
   pad_after: ${eval:'${n_action_steps}-1'}
+  obs_n_steps: ${n_obs_steps}
+  obs_only_n_steps: ${obs_only_n_steps}
   input_meta: 
     obs:
       cam_high: *image_shape

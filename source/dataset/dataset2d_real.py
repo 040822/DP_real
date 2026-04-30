@@ -17,7 +17,9 @@ class Dataset2D(Dataset):
                  input_meta: Union[Dict[str, Any], None]=None,
                  seperate_action: bool=False,
                  episode_mask: Union[np.ndarray, None]=None,
-                 use_mem: bool=True
+                 use_mem: bool=True,
+                 obs_only_n_steps: bool=False,
+                 obs_n_steps: Union[int, None]=None
                  ) -> None:
         
         if use_mem:
@@ -40,6 +42,7 @@ class Dataset2D(Dataset):
         mean_len = np.mean(episode_lengths)
 
         print(f"Episode lengths -> max: {max_len}, min: {min_len}, mean: {mean_len:.2f}")
+        print(f"pad_before: {pad_before}, pad_after: {pad_after}, horizon: {horizon}")
         # for idx, length in enumerate(episode_lengths):
         #     print(f"Episode {idx}: length {length}")
         
@@ -54,8 +57,13 @@ class Dataset2D(Dataset):
         self.separate_action = seperate_action
         self.obs_keys = list(self.input_meta["obs"].keys()) if self.input_meta is not None else []
         self.action_keys = [key for key in self.input_meta.keys() if key.startswith("action")] if self.input_meta is not None else []
+        self.obs_only_n_steps = obs_only_n_steps
+        self.obs_n_steps = obs_n_steps if obs_n_steps is not None else horizon
         self._normalizer = None
-
+        
+        if self.obs_only_n_steps:
+            print(f"Using obs_only_n_steps with obs_n_steps={self.obs_n_steps}.")
+            
     def __len__(self):
         return len(self.indices)
     
@@ -67,9 +75,10 @@ class Dataset2D(Dataset):
         :param end_idx: 结束索引
         :return: 填充后的数据
         """
+        total_len = data.shape[0]
         if start_idx > 0:
             data[:start_idx] = data[start_idx]
-        if end_idx < self.horizon:
+        if end_idx < total_len:
             data[end_idx:] = data[end_idx - 1]
 
         return data
@@ -106,7 +115,15 @@ class Dataset2D(Dataset):
         res = {'obs': {},}
         for key in self.obs_keys:
             if key.startswith("cam"):
-                obs = self.data[key][buffer_start_idx:buffer_end_idx]
+                if self.obs_only_n_steps:
+                    # 只加载obs_n_steps步的观测数据，避免无用的图像数据占用内存和计算资源
+                    obs_target_len = self.obs_n_steps
+                    obs_len = min(obs_target_len, sample_end_idx) - sample_start_idx
+                    obs_len = max(1, obs_len)
+                    obs_end_idx = buffer_start_idx + obs_len
+                    obs = self.data[key][buffer_start_idx:obs_end_idx]
+                else:
+                    obs = self.data[key][buffer_start_idx:buffer_end_idx]
                 obs = np.asarray(obs, dtype=np.uint8)
             elif key.startswith("qpos"):
                 obs = self.data[key][buffer_start_idx:buffer_end_idx]
@@ -115,9 +132,19 @@ class Dataset2D(Dataset):
                 obs = self.data[key][buffer_start_idx:buffer_end_idx]
                 obs = np.asarray(obs, dtype=np.float32)
             data_dtype = np.uint8 if key.startswith("cam") else np.float32
-            data = np.zeros((self.horizon, *obs.shape[1:]), dtype=data_dtype)
-            data[sample_start_idx:sample_end_idx] = obs
-            data = self.padding(data, sample_start_idx, sample_end_idx)
+            if key.startswith("cam") and self.obs_only_n_steps:
+                # 只创建obs_n_steps步的观测数据数组，避免无用的图像数据占用内存
+                data = np.zeros((self.obs_n_steps, *obs.shape[1:]), dtype=data_dtype)
+            else:
+                data = np.zeros((self.horizon, *obs.shape[1:]), dtype=data_dtype)
+            if key.startswith("cam") and self.obs_only_n_steps:
+                # pad时也只考虑obs_n_steps步的观测数据
+                obs_len = obs.shape[0]
+                data[sample_start_idx:sample_start_idx + obs_len] = obs
+                data = self.padding(data, sample_start_idx, sample_start_idx + obs_len)
+            else:
+                data[sample_start_idx:sample_end_idx] = obs
+                data = self.padding(data, sample_start_idx, sample_end_idx)
             res['obs'][key] = data
         for key in self.action_keys:
             action = self.data[key][buffer_start_idx:buffer_end_idx]

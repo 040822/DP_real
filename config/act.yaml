@@ -1,6 +1,6 @@
 defaults:
-  - _self_
   - task: default_task
+  - _self_
 
 name: ${task.name}
 task_name: ${task.name}
@@ -16,6 +16,7 @@ n_action_steps: 100
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 dataset_history_steps: ${n_history_steps}
+obs_only_n_steps: True
 
 past_action_visible: False
 keypoint_visible_rate: 1.0
@@ -144,7 +145,7 @@ checkpoint:
   auto_insert_metric_name: False
 
 trainer:
-  max_epochs: 500
+  max_epochs: 1
   accelerator: auto
   devices: 1
   precision: 32
