@@ -130,13 +130,39 @@ class CoarseMaskGenerator(nn.Module):
 
     @torch.no_grad()
     def forward(self, shape, device, history_idxs=None):
+        """
+        生成 Coarse DP 的条件掩码（condition mask）。
+
+        参数:
+        - shape (tuple): (B, T, D)，B=批次大小，T=时间步数，D=动作维度（必须等于 self.action_dim）。
+        - device (torch.device): 返回张量应放置的设备。
+        - history_idxs (int | Sequence[int] | torch.Tensor): 每个样本的历史动作最大索引（inclusive）。
+            - 标量（int 或 0-dim tensor）：对整个 batch 使用相同的 history index，会被扩展为长度 B 的向量；
+            - 长度为 B 的序列或 1-d tensor：为每个 batch 元素指定不同的 history index；
+            - 掩码按 "t <= history_idx" 规则设置（包含 history_idx 对应的时间步）。
+
+        返回:
+        - mask (torch.BoolTensor): 形状 (B, T, D) 的布尔掩码，dtype=torch.bool，device 为参数 device。
+            - mask[b, t, d] == True 表示该条目在训练/推理中应被视为已知/被条件化（conditioned / observed），
+              在采样或训练时通常用对应的真实值替换（例如 `trajectory[mask] = cond_data[mask]`）；
+            - mask[b, t, d] == False 表示该条目是需要模型生成/预测的位置（目标）。
+            - 时间掩码在所有动作维度上相同（即在最后一维上会被复制），因此每个时间步对所有动作维具有相同的可见性。
+        额外说明:
+        - 当 `self.use_first_action` 为 False 时，时间步 t==0 会被强制设为 False（即不把第一步作为条件），即使 history_idx >= 0。
+
+        例子:
+        - shape=(2,5,7), history_idxs=[2,1], use_first_action=True:
+            - mask[0] 在 t=0,1,2 为 True，其余为 False；mask[1] 在 t=0,1 为 True，其余为 False。
+        - history_idxs 为单个标量 2 会被扩展为 [2,2,...]。
+        """
         B, T, D = shape
         assert D == self.action_dim
-        
+
+        # 将 history_idxs 转为 tensor 并放到指定 device
         history_idxs = torch.tensor(history_idxs, device=device)
-        if torch.is_tensor(history_idxs) and len(history_idxs.shape) == 0: # 推理的时候，传入的history_idxs可能是标量tensor
+        if torch.is_tensor(history_idxs) and len(history_idxs.shape) == 0:  # 推理时传入的 history_idxs 可能是标量 tensor
             history_idxs = history_idxs.unsqueeze(0).to(device)
-            history_idxs = history_idxs.expand(B) # 扩展为B个相同的history_idxs
+            history_idxs = history_idxs.expand(B)  # 扩展为 B 个相同的 history_idxs
 
         # generate action mask
         steps = torch.arange(0, T, device=device).reshape(1,T).expand(B,T)
