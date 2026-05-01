@@ -59,7 +59,7 @@ def main(cfg: OmegaConf):
     if cfg.policy_name == "DDP2":
         horizon = cfg.policy.coarse_dp.horizon
         internal = cfg.policy.coarse_dp.internal
-        sample_horizon = (horizon-1)*internal + horizon + 1
+        sample_horizon = (horizon-1)*internal + horizon
         print("[Train] sample_horizon:", sample_horizon)
         idx = torch.linspace(0, sample_horizon - 1, steps=horizon).long()
         model.set_idx(idx) # 设置idx

@@ -233,8 +233,13 @@ class Coarse_DP2(BaseImagePolicy):
         naction_pred = nsample[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
+        # get action
+        start = To - 1
+        end = start + self.n_action_steps
+        action = action_pred[:,start:end]
+
         result = {
-            'action': action_pred,
+            'action': action,
             'action_pred': action_pred,
         }
 

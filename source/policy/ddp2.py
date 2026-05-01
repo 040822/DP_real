@@ -69,6 +69,7 @@ class DDP2(LightningModule):
 
             coarse_dp: Coarse_DP2,
             fine_dp: Fine_DP2,
+            detach_coarse_cache: bool = True,
             debug: bool = False,
             **kwargs):
         super().__init__()
@@ -85,12 +86,13 @@ class DDP2(LightningModule):
         
         self.coarse_cache_idx = 0
         self.coarse_ratio = 0.5 # coarse和fine的loss的比例
+        self.detach_coarse_cache = detach_coarse_cache # sample_num>1时是否截断跨step梯度
         self.debug = debug
 
         self.reset()  # 初始化缓存
         
         # ["fine_dp", "linear", "cubic_spline", "minimum_snap","only_coarse"]
-        self.predict_type = "cubic_spline"
+        self.predict_type = "fine_dp"
         print(f"[Double_DP3 predict_action] predict_type: {self.predict_type}")
     
     @property
@@ -144,7 +146,7 @@ class DDP2(LightningModule):
     def linear_interpolation(self, coarse_actions):
         coarse_actions_np = coarse_actions.detach().cpu().numpy() # B, T1, Da
         B, T1, Da = coarse_actions.shape
-        T2 = self.fine_dp.horizon - 3 + 1
+        T2 = self.fine_dp.horizon - 1  # 每段: 起始锚点 + n_action_steps 个内部点
         # scipy 的 interp1d 要求 x 为 1D；这里为每个 batch 复用同一组时间节点
         time_knots = np.broadcast_to(np.linspace(0, T1 - 1, T1), (B, T1))
         total_steps = (T1 - 1) * T2 + 1
@@ -171,7 +173,7 @@ class DDP2(LightningModule):
     def cubic_spline_interpolation(self, coarse_actions):
         coarse_actions_np = coarse_actions.detach().cpu().numpy() # B, T1, Da
         B, T1, Da = coarse_actions.shape
-        T2 = self.fine_dp.horizon - 3 + 1
+        T2 = self.fine_dp.horizon - 1  # 每段: 起始锚点 + n_action_steps 个内部点
         # scipy 的 CubicSpline 要求 x 为 1D；这里为每个 batch 复用同一组时间节点
         time_knots = np.broadcast_to(np.linspace(0, T1 - 1, T1), (B, T1))
         total_steps = (T1 - 1) * T2 + 1
@@ -209,7 +211,7 @@ class DDP2(LightningModule):
         n_segments = T1 - 1
         
         # 获取插值步长 (沿用你的逻辑)
-        T2 = self.fine_dp.horizon - 3 + 1
+        T2 = self.fine_dp.horizon - 1  # 每段: 起始锚点 + n_action_steps 个内部点
         
         # 归一化时间设定：假设每一段的时间长度 dt = 1.0
         # 如果需要物理时间，可以根据实际距离调整 dt
@@ -460,7 +462,7 @@ class DDP2(LightningModule):
             else:
                 coarse_loss, coarse_loss_dict = self.coarse_dp.compute_loss(obs_dict=obs_dict, trajectory=traj_coarse, history_idxs=history_idxs)
             # 截断跨 step 的计算图，避免 sample_num 内形成长链式反向传播。
-            coarse_cache = coarse_loss_dict['action'].detach() # 注意：传入的是unnormalize的action，与推理时一致。
+            coarse_cache = coarse_loss_dict['action'].detach() if self.detach_coarse_cache else coarse_loss_dict['action']
             # 根据coarse DP的输出，产生fine DP的输入动作。
             pre_action = torch.zeros(size=(B, T, Da), device=device, dtype=dtype) 
             # 按样本取当前段和下一段的 coarse 锚点，避免高级索引导致维度错位。
@@ -512,7 +514,7 @@ class DDP2(LightningModule):
     def training_step(self, batch, batch_idx):
         raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss(batch, sample_num=2, use_all_samples=False)
         self.log('train/loss', raw_loss, prog_bar=True, on_step=True, on_epoch=False, sync_dist=True)
-        self.log('train/mse_loss', coarse_loss_dict['mse_loss'], prog_bar=True, on_step=True, on_epoch=False, sync_dist=True)
+        self.log('train/coarse_mse', coarse_loss_dict['mse_loss'], prog_bar=True, on_step=True, on_epoch=False, sync_dist=True)
         if fine_loss_dict is not None:
             self.log('train/fine_loss', fine_loss_dict['loss'], prog_bar=True, on_step=True, on_epoch=False, sync_dist=True)
         return raw_loss

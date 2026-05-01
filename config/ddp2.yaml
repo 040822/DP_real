@@ -16,7 +16,7 @@ internal: 4
 
 
 horizon: -1
-n_action_steps: ${policy.fine_dp.n_action_steps}
+n_action_steps: ${eval:${internal} + 1}
 n_obs_steps: 1
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
@@ -32,6 +32,7 @@ policy:
   num_epochs_coarse: ${training.num_epochs_coarse}
   n_obs_steps: ${n_obs_steps}
   n_action_steps: ${n_action_steps}
+  detach_coarse_cache: true  # sample_num>1时是否截断跨step梯度；false则梯度贯穿所有step
 
   coarse_dp:
     _target_: source.policy.ddp2_coarse.Coarse_DP2

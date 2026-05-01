@@ -132,6 +132,44 @@ python inference.py \
 
 ROS 话题可通过命令行参数覆盖（如 `--img_front_topic`、`--puppet_arm_left_topic` 等）。
 
+## PI0.5 远程推理服务（Python 3.8/3.10 拆分）
+
+为解决 Python 3.8 环境无法安装 `lerobot` 的问题，使用拆分方案：
+
+- **Python 3.10+** 运行 PI0.5 推理服务（同机或异机）
+- **Python 3.8** 运行 ROS 客户端脚本 `inference_pi0.5.py`
+
+### 1) 服务器（Python 3.10+）
+
+```bash
+pip install -r requirements-pi05-server.txt
+python scripts/pi05_policy_server.py \
+    --lerobot_model lerobot/pi05_base \
+    --lerobot_task "Pick up the red block" \
+    --host 0.0.0.0 \
+    --port 8000
+```
+
+### 2) 客户端（Python 3.8 + ROS）
+
+```bash
+pip install -r requirements-pi05-client.txt
+python inference_pi0.5.py \
+    --pi05_server_host 127.0.0.1 \
+    --pi05_server_port 8000 \
+    --lerobot_task "Pick up the red block" \
+    --lerobot_camera_map "front:base_0_rgb,left:left_wrist_0_rgb,right:right_wrist_0_rgb" \
+    --lerobot_bgr2rgb
+```
+
+如服务器运行在异机，将 `--pi05_server_host` 替换为服务器 IP 或 `ws://<ip>:<port>`。
+
+### 3) 连接测试（可选）
+
+```bash
+python scripts/pi05_server_ping.py --host 127.0.0.1 --port 8000
+```
+
 ## 回放预录制数据
 
 ```bash
