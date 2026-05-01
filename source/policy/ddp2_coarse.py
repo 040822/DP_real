@@ -88,7 +88,6 @@ class Coarse_DP2(BaseImagePolicy):
         self.mask_generator = CoarseMaskGenerator(
             action_dim=action_dim,
             max_n_obs_steps=n_obs_steps,
-            use_first_action=True,
             debug=debug,
         )
         
@@ -205,8 +204,8 @@ class Coarse_DP2(BaseImagePolicy):
             # empty data for action
             
             if pre_action is None:
+                # 首次推理时，由于没有历史动作，所以pre_action为None，此时cond_data全为0，cond_mask全为False，相当于不提供条件，让模型根据obs自由生成。
                 cond_data = torch.zeros(size=(B, T, Da), device=device, dtype=dtype)
-                # cond_data[:,:To,...] = nobs['qpos'][:,:To,...]
             else:
                 cond_data = pre_action
             cond_mask = self.mask_generator(cond_data.shape, history_idxs=history_idxs, device=device)
@@ -234,13 +233,8 @@ class Coarse_DP2(BaseImagePolicy):
         naction_pred = nsample[...,:Da]
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
-        # get action
-        start = To - 1
-        end = start + self.n_action_steps
-        action = action_pred[:,start:end]
-
         result = {
-            'action': action,
+            'action': action_pred,
             'action_pred': action_pred,
         }
 
@@ -295,46 +289,41 @@ class Coarse_DP2(BaseImagePolicy):
         # Add noise to the clean images according to the noise magnitude at each timestep
         noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps)
         if pre_action is not None:
-            # self-forcing，把上一轮生成的动作作为输入。
+            # self-forcing：把上一轮生成的 coarse 动作作为输入。
             noisy_trajectory[condition_mask] = pre_action[condition_mask]
         else:
+            # teacher-forcing：把真实的动作作为输入。
             noisy_trajectory[condition_mask] = trajectory[condition_mask]
-            # pass
 
         pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=history_idxs)
 
-        # compute loss mask
-        loss_mask = torch.zeros_like(condition_mask, dtype=torch.bool)
-        loss_mask = ~loss_mask # 设置loss_mask全为True
+        # ===== compute loss =====
+        loss_mask = ~condition_mask # 不计算 condition_mask 位置的 loss
 
-        pred_type = self.noise_scheduler.config.prediction_type 
+        pred_type = self.noise_scheduler.config.prediction_type
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':
             target = trajectory
         else:
             raise ValueError(f"Unsupported prediction type {pred_type}")
-        
+
         mse_loss = F.mse_loss(pred, target, reduction='none')
 
-        loss = mse_loss * loss_mask.type(mse_loss.dtype)
-        
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss.mean()
+        loss_mask = loss_mask.to(mse_loss.dtype)
+        # 按「mask 内的总元素数」归一化，避免被 mask=False 的位置稀释。
+        mask_num = loss_mask.sum().clamp_min(1.0)
+        loss = (mse_loss * loss_mask).sum() / mask_num
+
         
         # unnormalize prediction 
         action_pred = self.normalizer['action'].unnormalize(pred)
-
-        # get action
-        start = 0
-        end = start + self.n_action_steps
-        action = action_pred[:,start:end]
         
         loss_dict = {
                 'pred': pred,
                 'loss': loss.item(),
                 'mse_loss': mse_loss.mean().item(),
-                'action': action,
+                'action': action_pred,
             }
 
         return loss, loss_dict

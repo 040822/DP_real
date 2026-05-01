@@ -170,10 +170,6 @@ class Fine_DP2(BaseImagePolicy):
         
         """
         # normalize input
-        if self.debug:
-            cprint(f"[DP3 Predict_action] obs_dict keys: {obs_dict.keys()}", "yellow")
-            for k, v in obs_dict.items():
-                cprint(f"[DP3 Predict_action] obs_dict[{k}]: {v.shape}", "yellow")
         nobs = self.normalizer.normalize(obs_dict)
         
         value = next(iter(nobs.values()))
@@ -209,7 +205,7 @@ class Fine_DP2(BaseImagePolicy):
             else:
                 cond_data = self.normalizer['action'].normalize(pre_action)
                 cond_mask = torch.zeros_like(cond_data, dtype=torch.bool)
-                cond_mask[:, 1, :] = True
+                cond_mask[:, 0, :] = True
                 cond_mask[:, -1, :] = True
         else:
             raise NotImplementedError("Not implemented obs_as_global_cond=False")
@@ -229,12 +225,9 @@ class Fine_DP2(BaseImagePolicy):
         action_pred = self.normalizer['action'].unnormalize(naction_pred)
 
         # get action
-        start = To - 1 # 1
-        end = start + self.n_action_steps + 1 #10 ，start对应的是coarse DP的动作，Fine DP本身预测8步，因此一共是9步
-        action = action_pred[:,start:end] # 1~9
-        if self.debug:
-            cprint(f"[DP3 Predict_action] start: {start}, end: {end}", "yellow")
-            cprint(f"[DP3 Predict_action] To(n_obs_steps):{To}, n_action_steps: {self.n_action_steps}", "yellow")
+        start = To - 1 # 0
+        end = start + self.n_action_steps + 1 # 0 + 8 + 1 = 9
+        action = action_pred[:,start:end] # 0~9
         # get prediction
 
 
@@ -242,11 +235,6 @@ class Fine_DP2(BaseImagePolicy):
             'action': action,
             'action_pred': action_pred,
         }
-        if self.debug:
-            cprint(f"[DP3 Predict_action] action shape: {action.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] action_pred shape: {action_pred.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] nsample shape: {nsample.shape}", "yellow")
-            cprint(f"[DP3 Predict_action] nobs shape: {nobs['pointcloud'].shape}", "yellow")
 
         return result
 
@@ -280,6 +268,7 @@ class Fine_DP2(BaseImagePolicy):
             raise NotImplementedError("Not implemented obs_as_global_cond=False")
         
         # condition_mask提取当前时刻之前的trajectory
+        # NOTE: condition_mask全为False，这一行保留是为了和原结构兼容；后续 loss_mask 直接显式构造。
         condition_mask = self.mask_generator(trajectory.shape, device=self.device)
 
         # Sample noise that we'll add to the images
@@ -297,21 +286,20 @@ class Fine_DP2(BaseImagePolicy):
 
 
         # Add noise to the clean images according to the noise magnitude at each timestep
-        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps) # 全False
-        
-        # 设置cond
+        noisy_trajectory = self.noise_scheduler.add_noise(trajectory, noise, timesteps)
+
+        # 设置cond，注意：condition_mask 此处恒全 False，这一行实际无副作用，仅保留为占位。
         noisy_trajectory[condition_mask] = trajectory[condition_mask]
         if pre_action is not None:
-            noisy_trajectory[:, 1, :] = pre_action[:, 1, :]
+            noisy_trajectory[:, 0, :] = pre_action[:, 0, :]
             noisy_trajectory[:, -1, :] = pre_action[:, -1, :]
 
         pred = self.model(sample=noisy_trajectory, timestep=timesteps, cond=global_cond, act_pos=act_position)
 
-        # compute loss mask
-        loss_mask = torch.zeros_like(condition_mask, dtype=torch.bool)
-        loss_mask = ~loss_mask # 设置loss_mask全为True
+        # ===== compute loss =====
+        loss_mask = ~condition_mask
 
-        pred_type = self.noise_scheduler.config.prediction_type 
+        pred_type = self.noise_scheduler.config.prediction_type
         if pred_type == 'epsilon':
             target = noise
         elif pred_type == 'sample':
@@ -321,10 +309,9 @@ class Fine_DP2(BaseImagePolicy):
         
         mse_loss = F.mse_loss(pred, target, reduction='none')
 
-        loss = mse_loss * loss_mask.type(mse_loss.dtype)
-        
-        loss = reduce(loss, 'b ... -> b (...)', 'mean')
-        loss = loss.mean()
+        loss_mask = loss_mask.to(mse_loss.dtype)
+        mask_num = loss_mask.sum().clamp_min(1.0)
+        loss = (mse_loss * loss_mask).sum() / mask_num
         loss_dict = {
                 'pred': pred,
                 'loss': loss.item(),

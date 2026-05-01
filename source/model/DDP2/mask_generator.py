@@ -125,7 +125,6 @@ class CoarseMaskGenerator(nn.Module):
         super().__init__()
         self.action_dim = action_dim
         self.max_n_obs_steps = max_n_obs_steps
-        self.use_first_action = use_first_action
         self.debug = debug
 
     @torch.no_grad()
@@ -136,24 +135,14 @@ class CoarseMaskGenerator(nn.Module):
         参数:
         - shape (tuple): (B, T, D)，B=批次大小，T=时间步数，D=动作维度（必须等于 self.action_dim）。
         - device (torch.device): 返回张量应放置的设备。
-        - history_idxs (int | Sequence[int] | torch.Tensor): 每个样本的历史动作最大索引（inclusive）。
-            - 标量（int 或 0-dim tensor）：对整个 batch 使用相同的 history index，会被扩展为长度 B 的向量；
-            - 长度为 B 的序列或 1-d tensor：为每个 batch 元素指定不同的 history index；
-            - 掩码按 "t <= history_idx" 规则设置（包含 history_idx 对应的时间步）。
-
+        - history_idxs (int | Sequence[int] | torch.Tensor): 每个样本的历史索引
+        
         返回:
-        - mask (torch.BoolTensor): 形状 (B, T, D) 的布尔掩码，dtype=torch.bool，device 为参数 device。
-            - mask[b, t, d] == True 表示该条目在训练/推理中应被视为已知/被条件化（conditioned / observed），
-              在采样或训练时通常用对应的真实值替换（例如 `trajectory[mask] = cond_data[mask]`）；
-            - mask[b, t, d] == False 表示该条目是需要模型生成/预测的位置（目标）。
-            - 时间掩码在所有动作维度上相同（即在最后一维上会被复制），因此每个时间步对所有动作维具有相同的可见性。
-        额外说明:
-        - 当 `self.use_first_action` 为 False 时，时间步 t==0 会被强制设为 False（即不把第一步作为条件），即使 history_idx >= 0。
-
-        例子:
-        - shape=(2,5,7), history_idxs=[2,1], use_first_action=True:
-            - mask[0] 在 t=0,1,2 为 True，其余为 False；mask[1] 在 t=0,1 为 True，其余为 False。
-        - history_idxs 为单个标量 2 会被扩展为 [2,2,...]。
+        - mask (torch.BoolTensor): 条件掩码，shape=(B, T, D)，T < history_idxs的位置为True，其他位置为False。
+        
+        示例：
+        当history_idx = 0时，mask全为False；当history_idx = 1时，mask的第一帧为True，其他为False，以此类推。
+  
         """
         B, T, D = shape
         assert D == self.action_dim
@@ -166,24 +155,7 @@ class CoarseMaskGenerator(nn.Module):
 
         # generate action mask
         steps = torch.arange(0, T, device=device).reshape(1,T).expand(B,T)
-        action_mask = (steps.T <= history_idxs).T.reshape(B,T,1).expand(B,T,D)
-
-        # generate action mask
-        if not self.use_first_action:
-            first_action_mask = (steps.T == 0).T.reshape(B,T,1).expand(B,T,D)
-            first_action_mask = ~first_action_mask
-            action_mask = action_mask & first_action_mask
-
-        mask = action_mask
-        
-        if self.debug:
-            print(f"[CoarseMaskGenerator] history_idxs shape: {history_idxs.shape}")
-            print(f"[CoarseMaskGenerator] mask shape: {mask.shape}, action_mask shape: {action_mask.shape}")
-            for i in range(3):
-                if i >= B:
-                    break
-                print(f"[CoarseMaskGenerator] mask[{i}]: {mask[i,:,0]}")
-                print(f"[CoarseMaskGenerator] history_idx[{i}]: {history_idxs[i]}")
+        mask = (steps.T < history_idxs).T.reshape(B,T,1).expand(B,T,D)
 
         return mask
 

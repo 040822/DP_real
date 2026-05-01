@@ -57,12 +57,11 @@ def main(cfg: OmegaConf):
     
     # [DDP3] 处理数据集大小和分割idx
     if cfg.policy_name == "DDP2":
-        horizon = cfg.policy.coarse_dp.horizon-1
+        horizon = cfg.policy.coarse_dp.horizon
         internal = cfg.policy.coarse_dp.internal
         sample_horizon = (horizon-1)*internal + horizon + 1
         print("[Train] sample_horizon:", sample_horizon)
-        idx = torch.linspace(1, sample_horizon - 1, steps=horizon).long()
-        idx = torch.cat([torch.zeros(1, dtype=idx.dtype), idx]) #加入0
+        idx = torch.linspace(0, sample_horizon - 1, steps=horizon).long()
         model.set_idx(idx) # 设置idx
         cfg.task.dataset.horizon = sample_horizon # 设置数据集的horizon
         # cfg.task.dataset.pad_after = int(1 * sample_horizon) # 设置数据集的pad_after, 因为DDP3需要在数据末尾进行padding以满足horizon长度

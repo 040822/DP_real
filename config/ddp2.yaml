@@ -17,7 +17,7 @@ internal: 4
 
 horizon: -1
 n_action_steps: ${policy.fine_dp.n_action_steps}
-n_obs_steps: 2
+n_obs_steps: 1
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 keypoint_visible_rate: 1.0
@@ -90,7 +90,7 @@ policy:
     - 80
     - 80
     encoder_output_dim: 128
-    horizon: ${eval:${internal} + 3}
+    horizon: ${eval:${internal} + 2}
     internal: ${internal}
     n_action_steps: ${internal}
     n_obs_steps: ${n_obs_steps}
