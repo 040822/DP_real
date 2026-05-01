@@ -611,7 +611,8 @@ def get_model_input(frame):
     # img_left = cv2.resize(img_left, (256, 256), interpolation=cv2.INTER_LINEAR)
     # img_right = cv2.resize(img_right, (256, 256), interpolation=cv2.INTER_LINEAR)
 
-    img_front = rearrange(img_front, 'h w c -> c h w') / 255.0  
+    # img_front = rearrange(img_front, 'h w c -> c h w') / 255.0  
+    img_front = rearrange(img_front, 'h w c -> c h w') 
     # img_left = rearrange(img_left, 'h w c -> c h w') / 255.0
     # img_right = rearrange(img_right, 'h w c -> c h w') / 255.0
     qpos = np.concatenate((np.array(puppet_arm_left.position), np.array(puppet_arm_right.position)), axis=0)
@@ -639,7 +640,8 @@ def model_inference(args):
 
 
     # 1 load policy 加载模型
-    payload = torch.load(open(os.path.join(args.ckpt_dir, args.ckpt_name), 'rb'), pickle_module=dill)
+    # treat args.ckpt_dir as the full checkpoint file path
+    payload = torch.load(args.ckpt_dir, pickle_module=dill)
     # seed_everything(payload['cfg']['seed'])
     # payload['cfg']["horizon"] = 32
     # payload['cfg']["policy"]["horizon"] = 32
@@ -680,9 +682,14 @@ def model_inference(args):
         
         gripper_switch = 0
         while True and not rospy.is_shutdown():
+            if publish_step % 5 == 0:
+                print("1")
+
             publish_step = publish_step + 1
             if publish_step > args.max_publish_step:
                 break
+  
+
             actions = env.get_action(policy) # 获得action
             actions = np.array(actions)
             
@@ -694,7 +701,7 @@ def model_inference(args):
             #     gripper_switch += 1
             #     cprint('right hack','red')
             
-            actions = action_topp(actions, num=4) # 插值
+            actions = action_topp(actions, num=0) # 插值
 
                  
             for action in actions:
@@ -708,7 +715,7 @@ def model_inference(args):
                 # 处理夹抓状态
                 cprint(f'left_gripper:{left_action[-1]}, right_gripper:{right_action[-1]}','yellow')
                 left_action[-1] = left_action[-1] if left_action[-1] > 0.025 else 0
-                right_action[-1] = right_action[-1] if right_action[-1] > 0.025 else 0
+                right_action[-1] = right_action[-1] if right_action[-1] > 0.055 else 0
                 # if right_action[-1] > 0.5:
                 #     right_action[-1] = 0.09
                 # elif right_action[-1] < 0.03:
@@ -722,7 +729,7 @@ def model_inference(args):
                 left_gripper_diff, right_gripper_diff = gripper_diff(old_action, new_action)
                 print(f'Action diff mse: {action_diff}')
                 
-                if action_diff > 0.01:
+                if action_diff > 0.05:
                     cprint('Action jump detected, skip this action','red')
                     continue
                 # if right_gripper_diff > 0.1 and right_action[-1] > 0.03:
@@ -832,12 +839,10 @@ def action_topp(actions, num=8):
 
 def get_arguments():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
-    parser.add_argument('--task_name', action='store', type=str, help='task_name', default='aloha_mobile_dummy', required=False)
+    parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt file path (full path to checkpoint file)', required=True)
     parser.add_argument('--max_publish_step', action='store', type=int, help='max_publish_step', default=250, required=False)
-    parser.add_argument('--ckpt_name', action='store', type=str, help='ckpt_name', default='policy_best.ckpt', required=False)
-    parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', default='DP2', required=False)
 
+    # ROS topic输入和配置，一般不需要修改
     parser.add_argument('--img_front_topic', action='store', type=str, help='img_front_topic',
                         default='/camera_f/color/image_raw', required=False)
     parser.add_argument('--img_left_topic', action='store', type=str, help='img_left_topic',
@@ -868,12 +873,10 @@ def get_arguments():
     parser.add_argument('--use_robot_base', action='store', type=bool, help='use_robot_base',
                         default=False, required=False)
     parser.add_argument('--publish_rate', action='store', type=int, help='publish_rate',
-                        default=40, required=False)
+                        default=30, required=False)
     parser.add_argument('--arm_steps_length', action='store', type=float, help='arm_steps_length',
                         default=[0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.2], required=False)
 
-    parser.add_argument('--use_actions_interpolation', action='store', type=bool, help='use_actions_interpolation',
-                        default=False, required=False)
     parser.add_argument('--use_depth_image', action='store', type=bool, help='use_depth_image',
                         default=False, required=False)
 

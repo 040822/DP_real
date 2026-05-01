@@ -679,7 +679,6 @@ def model_inference(args):
     - 推理过程中会检查 rospy.is_shutdown() 用于安全退出。
     参数（通过 args 对象提供，必须包含以下属性）：
     - ckpt_dir (str): checkpoint 所在目录路径。
-    - ckpt_name (str): checkpoint 文件名（例如 'model.ckpt'）。
     - publish_rate (float/int): 推理循环的发布频率（Hz），用于 rospy.Rate。
     - max_publish_step (int): 最大发布步数，达到后退出循环。
     - use_robot_base (bool): 是否解析并发送底盘速度动作（action[14:16]）。
@@ -726,7 +725,7 @@ def model_inference(args):
     dataset_name = f'episode_{episode_idx}'
     qposs, qvels, efforts, actions, base_actions, image_dicts = load_hdf5(os.path.join(dataset_dir, task_name), dataset_name)
 
-    actions = action_topp(actions, num=1)
+    actions = action_topp(actions, num=0)
 
     with torch.inference_mode():
         publish_step = 0
@@ -743,7 +742,7 @@ def model_inference(args):
                 if rospy.is_shutdown():
                     break
 
-                if step%16 == 0:
+                if step%100 == 0:
                     time.sleep(1)
 
                 left_action = action[:7] 
@@ -813,11 +812,8 @@ def get_arguments():
     parser.add_argument('--dataset_dir', action='store', type=str, help='Dataset dir.',  default="/home/agilex/data_wx/playing_card_delivery/", required=False)
     parser.add_argument('--episode_idx', action='store', type=int, help='Episode index.',default=1, required=False)
 
-    # parser.add_argument('--ckpt_dir', action='store', type=str, help='ckpt_dir', required=True)
     parser.add_argument('--task_name', action='store', type=str, help='task_name', default='aloha_mobile_dummy', required=False)
     parser.add_argument('--max_publish_step', action='store', type=int, help='max_publish_step', default=250, required=False)
-    parser.add_argument('--ckpt_name', action='store', type=str, help='ckpt_name', default='policy_best.ckpt', required=False)
-    parser.add_argument('--policy_class', action='store', type=str, help='policy_class, capitalize', default='DP2', required=False)
 
     parser.add_argument('--img_front_topic', action='store', type=str, help='img_front_topic',
                         default='/camera_f/color/image_raw', required=False)
@@ -849,7 +845,7 @@ def get_arguments():
     parser.add_argument('--use_robot_base', action='store', type=bool, help='use_robot_base',
                         default=False, required=False)
     parser.add_argument('--publish_rate', action='store', type=int, help='publish_rate',
-                        default=40, required=False)
+                        default=30, required=False)
     parser.add_argument('--arm_steps_length', action='store', type=float, help='arm_steps_length',
                         default=[0.01, 0.01, 0.01, 0.01, 0.01, 0.01, 0.2], required=False)
 
