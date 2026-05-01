@@ -423,54 +423,7 @@ class DDP2(LightningModule):
         return action
 
     # ========= training  ============
-    def compute_loss(self, batch: Dict[str, torch.Tensor], only_coarse=False) -> Dict[str, torch.Tensor]:
-        B = batch['action'].shape[0] # B：批次大小
-        T = self.fine_dp.horizon
-        Da = self.fine_dp.action_dim # Dim of action
-        Do = self.fine_dp.obs_feature_dim # Dim of obs
-        To = self.fine_dp.n_obs_steps # Number of observation steps
-        
-        # build input
-        device = self.device
-        dtype = self.dtype
-        
-        # dataset design 
-        coarse_batch, refine_batch, sample_idx, history_idxs = self.split_batch(batch)
-
-        coarse_batch = dict_apply(coarse_batch, lambda x: x.to(device, non_blocking=True))
-        refine_batch = dict_apply(refine_batch, lambda x: x.to(device, non_blocking=True))
-
-        # compute loss
-        coarse_loss, coarse_loss_dict = self.coarse_dp.compute_loss(coarse_batch, history_idxs=history_idxs)
-
-        if only_coarse:
-            return coarse_loss, coarse_loss_dict, None
-        
-        coarse_action = coarse_loss_dict["pred"] # coarse_action: [B, 16, Da]
-        if self.debug:
-           print(f"[Double_DP3 compute_loss] coarse_action: {coarse_action.shape}")
-
-        pre_action = torch.zeros(size=(B, T, Da), device=device, dtype=dtype) # 产生fine DP的输入动作。
-        for i in range(B):
-            pre_action[i, 1, :] = coarse_action[i, sample_idx[i], :]
-            pre_action[i, -1, :] = coarse_action[i, sample_idx[i]+1, :]
-
-        if self.debug:
-           print(f"sample_idx: {sample_idx}, coarse_action: {coarse_action.shape}, pre_action: {pre_action.shape}")
-        # sample_idx 为从 1 到 14 (idx_len-2) 抽取的索引，0和15弃用
-        # idx=1 对应 coarse_batch 的第一个动作，即 coarse_batch['action'][:, 1, :] , 注意coarse_batch['action'][:, 0, :]是obs的真实动作，1~15才是coarse预测的动作。
-        
-        # 注意：refine_batch 和 pre_action 的 idx 对齐
-        act_position = torch.tensor(sample_idx, device=device)
-        refine_loss , refine_loss_dict = self.fine_dp.compute_loss(batch=refine_batch, pre_action=pre_action, act_position=act_position)
-        if self.debug:
-            print(f"[Double_DP3 compute_loss] coarse_loss: {coarse_loss}, refine_loss: {refine_loss}")
-        
-        loss = self.coarse_ratio * coarse_loss + (1 - self.coarse_ratio) * refine_loss
-        return loss, coarse_loss_dict, refine_loss_dict
-
-        
-    def compute_loss_next_n_sample(self, batch: Dict[str, torch.Tensor], sample_num = 1, use_all_samples=False) -> Dict[str, torch.Tensor]:
+    def compute_loss(self, batch: Dict[str, torch.Tensor], sample_num = 1, use_all_samples=False) -> Dict[str, torch.Tensor]:
         '''
         计算下一段的损失，对应单步推理和teacher forcing的训练方式。
         '''
@@ -503,13 +456,13 @@ class DDP2(LightningModule):
                 # 每一步向后推进一个history位置。
                 history_idxs = [idx + 1 for idx in history_idxs]
                 
-            obs_dict, traj_coarse, traj_fine = self.split_batch_2(batch, history_idxs)
+            obs_dict, traj_coarse, traj_fine = self.split_batch(batch, history_idxs)
             
             if coarse_cache is not None:
                 # 如果不是第一步，使用上一步的coarse DP输出作为输入。
-                coarse_loss, coarse_loss_dict = self.coarse_dp.compute_loss_2(obs_dict=obs_dict, trajectory=traj_coarse, history_idxs=history_idxs, pre_action=coarse_cache)  
+                coarse_loss, coarse_loss_dict = self.coarse_dp.compute_loss(obs_dict=obs_dict, trajectory=traj_coarse, history_idxs=history_idxs, pre_action=coarse_cache)  
             else:
-                coarse_loss, coarse_loss_dict = self.coarse_dp.compute_loss_2(obs_dict=obs_dict, trajectory=traj_coarse, history_idxs=history_idxs)
+                coarse_loss, coarse_loss_dict = self.coarse_dp.compute_loss(obs_dict=obs_dict, trajectory=traj_coarse, history_idxs=history_idxs)
             # 截断跨 step 的计算图，避免 sample_num 内形成长链式反向传播。
             coarse_cache = coarse_loss_dict['pred'].detach() # [B, idx_len, Da]
             
@@ -522,7 +475,7 @@ class DDP2(LightningModule):
             pre_action[:, 1, :] = coarse_loss_dict['action'][batch_indices, history_idxs_tensor+1, :]
             pre_action[:, -1, :] = coarse_loss_dict['action'][batch_indices, next_history_idxs_tensor+1, :]
                 
-            fine_loss, fine_loss_dict = self.fine_dp.compute_loss_2(obs_dict=obs_dict, trajectory=traj_fine, pre_action=pre_action, act_position=history_idxs)
+            fine_loss, fine_loss_dict = self.fine_dp.compute_loss(obs_dict=obs_dict, trajectory=traj_fine, pre_action=pre_action, act_position=history_idxs)
             
             step_loss = self.coarse_ratio * coarse_loss + (1 - self.coarse_ratio) * fine_loss
             loss_sum = loss_sum + step_loss
@@ -534,7 +487,7 @@ class DDP2(LightningModule):
     
     # ========= data process  ============
     
-    def split_batch_2(self, batch, history_idxs):
+    def split_batch(self, batch, history_idxs):
         B = batch['action'].shape[0]
         To = self.fine_dp.n_obs_steps
         device = self.device
@@ -566,56 +519,11 @@ class DDP2(LightningModule):
         traj_fine = torch.stack([nactions[i, begin_idx[i]-1:end_idx[i]+1] for i in range(B)]) # [B, T+3, Da], T+3是为了和之前的训练方式对齐，后边可以改成+2
             
         return obs_dict, traj_coarse, traj_fine
- 
-    def split_batch(self, batch):
-        # 根据 self.idx 分割 batch
-        nobs = batch['obs'] # B,To,Do
-        nactions = batch['action'] # B,T,Da
-        
-        # 获取维度信息
-        batch_coarse = {}
-        batch_fine = {}
-        idx_len = len(self.idx)
-        batch_size = nactions.shape[0] # 获取批次大小
-        device = nactions.device
-        batch_indices = torch.arange(batch_size)
-        
-        # 生成 history_idx, 用于coarse DP
-        history_idxs = [random.randint(0, idx_len - 2) for _ in range(batch_size)] # 随机生成每个样本的history_idx，范围是0到idx_len-2。
-        # 注意：history_idx=0代表当前没有历史动作，从头训练。
-        
-        # 生成 sample_idx, 用于fine DP
-        sample_idxs = [random.randint(1, idx_len - 2) for _ in range(batch_size) ] # 1到idx_len-2之间抽取一个索引。去掉0和最后一个idx
-        fine_start = [self.idx[sample_idx] - 1 for sample_idx in sample_idxs] # 为了加上先前的obs，因此 -1
-        fine_end = [self.idx[sample_idx+1] + 1 for sample_idx in sample_idxs] # 为了加上idx[sample_idx+1]之后的action，因此 +1
-        # 设sample_idx为1，则fine_start=0，fine_end=11，fine_start:fine_end=0~10,正好11帧。
-        
-        # 获取first_obs_idxs，用于coarse DP
-        first_obs_idxs = [self.idx[i+1]-1 for i in history_idxs]  # 获取第一帧obs的索引
-        first_obs_idxs = torch.tensor(first_obs_idxs, device=device)
-        
-        # 分割batch['action']
-        batch_coarse['action'] = nactions[:, self.idx]
-        batch_coarse['action'][batch_indices, 0, :] = nactions[batch_indices, first_obs_idxs, :] # 将第一帧obs的动作放在初始帧
-        batch_fine['action'] = torch.stack([nactions[i, fine_start[i]:fine_end[i]] for i in range(batch_size)])
-
-        # 分割batch['obs']
-        batch_coarse['obs'] = {}
-        batch_fine['obs'] = {}
-        for kk in nobs:
-            v = nobs[kk]
-            batch_coarse['obs'][kk] = v[:, self.idx]
-            batch_coarse['obs'][kk][batch_indices, 0, :] = v[batch_indices, first_obs_idxs, :] # 将第一帧obs的动作放在初始帧
-            batch_fine['obs'][kk] = torch.stack([v[i, fine_start[i]:fine_end[i]] for i in range(batch_size)])
-
-        return batch_coarse, batch_fine, sample_idxs, history_idxs
 
 
     # ========= trainer  ============
     def training_step(self, batch, batch_idx):
-        # raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss_2(batch)
-        # sample_num = int(self.current_epoch / 100) + 1
-        raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss_next_n_sample(batch, sample_num=1, use_all_samples=False)
+        raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss(batch, sample_num=1, use_all_samples=False)
         self.log('train/loss', raw_loss, prog_bar=True, on_step=True, on_epoch=False, sync_dist=True)
         self.log('train/mse_loss', coarse_loss_dict['mse_loss'], prog_bar=True, on_step=True, on_epoch=False, sync_dist=True)
         if fine_loss_dict is not None:
@@ -623,8 +531,7 @@ class DDP2(LightningModule):
         return raw_loss
     
     def validation_step(self, batch, batch_idx):
-        # raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss(batch)
-        raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss_next_n_sample(batch, sample_num=1, use_all_samples=False)
+        raw_loss, coarse_loss_dict, fine_loss_dict = self.compute_loss(batch, sample_num=1, use_all_samples=False)
         self.log('val/loss', raw_loss, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
         self.log('val/mse_loss', coarse_loss_dict['mse_loss'], prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
         if fine_loss_dict is not None:
