@@ -639,6 +639,24 @@ def load_hdf5(dataset_dir, dataset_name):
             effort = None
         action = root['/action'][()]
         base_action = root['/base_action'][()]
+        master_action = root['/master_action'][()]
+        
+        action_mode_list = ["use_action", "use_master_action", "use_master_gripper_action"]
+        action_mode = action_mode_list[2]
+        
+        if action_mode == "use_action":
+            # 使用root['/action']
+            pass
+        elif action_mode == "use_master_action":
+            # 使用root['/master_action']
+            action = master_action
+        elif action_mode == "use_master_gripper_action":
+            # 使用root['/master_action']的第7维和第14维作为gripper动作，剩余维使用root['/action']
+            action[..., 6] = master_action[..., 6]
+            action[..., 13] = master_action[..., 13]
+
+        # action[..., 6] += 0.002
+        # action[..., 13] += 0.002
         
         image_dict = dict()
         for cam_name in root[f'/observations/images/'].keys():
@@ -707,6 +725,8 @@ def model_inference(args):
     # left_dir.mkdir(parents=True, exist_ok=True)
     # right_dir.mkdir(parents=True, exist_ok=True)
 
+    add_noise=False
+
 
     # 2 create env 创建env
     ros_operator = RosOperator(args)
@@ -747,13 +767,15 @@ def model_inference(args):
 
                 left_action = action[:7] 
                 right_action = action[7:14]
-                noise = 0.005 * np.random.randn(*right_action.shape)
-                noise[-1] = 0
-                right_action = right_action + noise
-                right_action[-1]  -= 0.01
+
+                if add_noise:
+                    noise = 0.005 * np.random.randn(*right_action.shape)
+                    noise[-1] = 0
+                    right_action = right_action + noise
+
                 
-                left_action[-1] = left_action[-1] if left_action[-1] > 0.025 else 0
-                right_action[-1] = right_action[-1] if right_action[-1] > 0.025 else 0
+                # left_action[-1] = left_action[-1] if left_action[-1] > 0.025 else 0
+                # right_action[-1] = right_action[-1] if right_action[-1] > 0.025 else 0
                 vel_action = None
                 if args.use_robot_base:
                     vel_action = action[14:16]
