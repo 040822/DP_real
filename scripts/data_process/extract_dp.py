@@ -45,6 +45,7 @@ def extract_hdf5_data(hdf5_file):
         # cam_right = f['cam_right'][:, :, 80:-80]
         # cam_left = f['cam_left'][:, :, 80:-80]
         action = f['action'][:]
+        master_action = f['master_action'][:]
         qpos = f['observations/qpos'][:]
         cam_high = f['observations/images/cam_high'][:]
 
@@ -54,7 +55,7 @@ def extract_hdf5_data(hdf5_file):
             # 'cam_left': cam_left,
             'qpos': qpos
         },
-        'action': action
+        'action': master_action
     }
 
 def main(dataset_dir: str, output_path: str) -> None:
