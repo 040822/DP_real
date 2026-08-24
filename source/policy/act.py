@@ -162,7 +162,9 @@ class ACT(BasePolicy):
         encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
         # do not mask cls token
         cls_joint_is_pad = torch.full((bs, 2), False).to(state_embed.device) # False: not a padding
-        is_pad = torch.full((bs, nactions.shape[-2]), False).to(state_embed.device)
+        # 使用数据集返回的真实补齐掩码（补齐位=True，被忽略）；不再硬编码全 False
+        assert 'is_pad' in batch, "dataset must return 'is_pad' for ACT padding mask"
+        is_pad = batch['is_pad'].to(nactions.device)  # (bs, horizon)
         src_key_padding_mask = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
         # obtain position embedding
         pos_embed = self.pos_table.clone().detach()

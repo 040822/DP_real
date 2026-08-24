@@ -112,7 +112,8 @@ class Dataset2D(Dataset):
     
     def __getitem__(self, idx: int) -> Dict[str, Any]:
         buffer_start_idx, buffer_end_idx, sample_start_idx, sample_end_idx = self.indices[idx]
-        res = {'obs': {},}
+        # sample_start_idx / buffer_start_idx 供 CDP2/CDP3 的 KV-cache 索引使用；ACT/DP2 不使用这两个键，多返回无害。
+        res = {'obs': {}, 'sample_start_idx': np.array(sample_start_idx), 'buffer_start_idx': np.array(buffer_start_idx)}
         for key in self.obs_keys:
             if key.startswith("cam"):
                 if self.obs_only_n_steps:
@@ -153,6 +154,11 @@ class Dataset2D(Dataset):
             data[sample_start_idx:sample_end_idx] = action
             data = self.padding(data, sample_start_idx, sample_end_idx)
             res[key] = data
+
+        # 真实动作占据 [sample_start_idx, sample_end_idx)，其余为补齐位（用于 ACT padding mask）
+        is_pad = np.ones(self.horizon, dtype=bool)
+        is_pad[sample_start_idx:sample_end_idx] = False
+        res['is_pad'] = is_pad
 
         # if not self.separate_action:
         #     agent_num = len(action_keys)
