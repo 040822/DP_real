@@ -60,3 +60,4 @@ config/task/*
 !config/task/default_task.yaml
 data_pre/*
 data_pre
+scripts/train_act_hdf5.sh

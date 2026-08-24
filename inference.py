@@ -25,6 +25,7 @@ from cv_bridge import CvBridge
 import threading
 import dill
 import threading
+import copy
 import hydra
 from lightning.pytorch import LightningModule
 from pytorch_lightning import seed_everything
@@ -33,6 +34,9 @@ from pathlib import Path
 from termcolor import cprint
 
 import sys
+# w覆盖写；buffering=1 实时刷新，不会缓存
+sys.stdout = open("debug.out", "w", buffering=1, encoding="utf-8")
+sys.stderr = sys.stdout  # print打印 + 异常报错堆栈，全部写入out文件
 import numpy as np
 
 sys.path.append("./")
@@ -84,7 +88,7 @@ class RosOperator:
           周期由 args.publish_rate 决定。线程会周期性检查 puppet_arm_publish_lock 以决定是否中止。
     - puppet_arm_publish_linear(left, right):
           使用 np.linspace 在固定步数（默认 100）上生成线性轨迹，以固定频率发布，每步保证最后关节值等于目标。
-    - puppet_arm_publish_continuous_thread(left, right):
+    - puppet_arm_publish_continuous_thread(left, right):s
           管理连续发布线程的替换：如果已有线程则请求其停止、join，然后启动新线程。
     - get_frame():
           尝试从前/左/右相机（及可选深度流）、左右臂关节与可选底盘里程计中组装时间同步的一帧数据。
@@ -692,6 +696,7 @@ def model_inference(args):
 
             actions = env.get_action(policy) # 获得action
             actions = np.array(actions)
+            debug_raw_policy_actions(actions)
             
             # if gripper_switch == 1:
             #     hack_action = old_action
@@ -701,7 +706,7 @@ def model_inference(args):
             #     gripper_switch += 1
             #     cprint('right hack','red')
             
-            actions = action_topp(actions, num=0) # 插值
+            # actions = action_topp(actions, num=2) # 插值
 
                  
             for action in actions:
@@ -715,21 +720,16 @@ def model_inference(args):
                 # 处理夹抓状态
                 cprint(f'left_gripper:{left_action[-1]}, right_gripper:{right_action[-1]}','yellow')
                 left_action[-1] = left_action[-1] if left_action[-1] > 0.025 else 0
-                right_action[-1] = right_action[-1] if right_action[-1] > 0.055 else 0
-                # if right_action[-1] > 0.5:
-                #     right_action[-1] = 0.09
-                # elif right_action[-1] < 0.03:
-                #     right_action[-1] = 0
+                right_action[-1] = right_action[-1] if right_action[-1] > 0.025 else 0
                 
                 vel_action = None
                 if args.use_robot_base:
                     vel_action = action[14:16]
 
                 action_diff = action_mse(old_action, new_action)
-                left_gripper_diff, right_gripper_diff = gripper_diff(old_action, new_action)
-                print(f'Action diff mse: {action_diff}')
-                
-                if action_diff > 0.05:
+                debug_action(old_action, new_action, left_action, right_action, action_diff)
+
+                if action_diff > 0.1:
                     cprint('Action jump detected, skip this action','red')
                     continue
                 # if right_gripper_diff > 0.1 and right_action[-1] > 0.03:
@@ -745,6 +745,7 @@ def model_inference(args):
                 obs = get_model_input(frame)
                 env.update_obs(obs)
 
+                debug_qpos(env, new_action)
                 rate.sleep()
                 
                 old_action = new_action
@@ -835,7 +836,37 @@ def action_topp(actions, num=8):
     if is_torch:
         return torch.tensor(out, device=device, dtype=dtype)
     return out
-    
+
+def debug_raw_policy_actions(actions):
+    print("\n========== RAW POLICY ACTIONS ==========")
+    print("shape:", actions.shape)
+    print("first:", np.round(actions[0], 4))
+    print("last :", np.round(actions[-1], 4))
+    print("========================================")
+
+
+def debug_action(old_action, new_action, left_action, right_action, action_diff):
+    print("\n========== ACTION DEBUG ==========")
+    print("new_action :", np.round(new_action, 4))
+    if old_action is not None:
+        print("old_action :", np.round(old_action, 4))
+        print("delta      :", np.round(new_action - old_action, 4))
+    print("left_action :", np.round(left_action, 4))
+    print("right_action:", np.round(right_action, 4))
+    print("action_diff :", action_diff)
+    print("will_skip   :", action_diff > 0.1)
+    print("==================================")
+    print(f'Action diff mse: {action_diff}')
+
+
+def debug_qpos(env, new_action):
+    print("\n========== qpos DEBUG ==========")
+    current_qpos = env.get_n_steps_obs()['qpos'][-1]
+    print("current qpos:", np.round(current_qpos, 4))
+    print("command     :", np.round(new_action[:14], 4))
+    print("cmd-qpos    :", np.round(new_action[:14] - current_qpos, 4))
+    print("==================================")
+
 
 def get_arguments():
     parser = argparse.ArgumentParser()
