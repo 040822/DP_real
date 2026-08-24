@@ -121,7 +121,7 @@ class MultiImageObsTokensEncoder(ModuleAttrMixin):
                             pos_enc=False
                         )
                     else:
-                        this_normalizer = torchvision.transforms.CenterCrop(
+                        this_randomizer = torchvision.transforms.CenterCrop(
                             size=(h,w)
                         )
                 # configure normalizer
