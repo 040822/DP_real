@@ -49,7 +49,7 @@ dataset_obs_steps: ${n_obs_steps}
 past_action_visible: False
 keypoint_visible_rate: 1.0
 obs_as_cond: True
-obs_only_n_steps: False
+obs_only_n_steps: True
 
 policy:
   _target_: source.policy.cdp2.CDP2

@@ -83,7 +83,7 @@ def main(cfg: OmegaConf):
         ModelAveragingCallback(decay=cfg.ema.decay, update_every_n_steps=cfg.ema.update_every_n_steps),
         SaveConfigCallback(OmegaConf.to_container(cfg, resolve=True)),
         TQDMProgressBar(refresh_rate=cfg.training.progress_bar_refresh_rate if 'progress_bar_refresh_rate' in cfg.training else 10),
-        SampleCallback(),
+        # SampleCallback(),
     ]
 
     logger = WandbLogger(
