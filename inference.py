@@ -667,8 +667,18 @@ def model_inference(args):
     policy.eval()
 
     # 2 create env 创建env
+    # 从 checkpoint 内保存的 resolved config 读取时序配置，避免 EnvRunner 硬编码与
+    # 训练时不一致（P0-02：此前固定 n_obs_steps=3，导致 ACT(n_obs_steps=1) 只用最旧帧）。
+    cfg = payload['cfg']
+    n_obs_steps = int(cfg['n_obs_steps'])
+    n_action_steps = int(cfg['n_action_steps'])
+    assert n_obs_steps == policy.n_obs_steps, \
+        f"EnvRunner.n_obs_steps({n_obs_steps}) != policy.n_obs_steps({policy.n_obs_steps})"
+    assert n_action_steps == policy.n_action_steps, \
+        f"EnvRunner.n_action_steps({n_action_steps}) != policy.n_action_steps({policy.n_action_steps})"
+
     ros_operator = RosOperator(args)
-    env = EnvRunner(ros_operator=ros_operator)
+    env = EnvRunner(n_obs_steps=n_obs_steps, n_action_steps=n_action_steps, ros_operator=ros_operator)
     env.reset()
 
     # 获得输入
