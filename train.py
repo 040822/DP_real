@@ -35,7 +35,7 @@ OmegaConf.register_new_resolver("eval", eval, replace=True) # 注册eval解析�
 @hydra.main(
     version_base=None,
     config_path="./config",
-    config_name="ddp3"
+    config_name="dp2"
 )
 def main(cfg: OmegaConf):
     OmegaConf.resolve(cfg)
