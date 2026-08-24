@@ -9,10 +9,10 @@ policy_name: ACT
 info: 
 
 seed: 42
-horizon: 100
+horizon: 30
 n_obs_steps: 1
 n_history_steps: 0
-n_action_steps: 100
+n_action_steps: 30
 n_latency_steps: 0
 dataset_obs_steps: ${n_obs_steps}
 dataset_history_steps: ${n_history_steps}
@@ -27,7 +27,7 @@ kl_weight: 10
 hidden_dim: 512
 dim_feedforward: 3200
 enc_layers: 4
-dec_layers: 1
+dec_layers: 7
 nheads: 8
 masks: False
 pre_norm: False
@@ -85,7 +85,7 @@ policy:
     num_decoder_layers: ${dec_layers}
     dim_feedforward: ${dim_feedforward}
     d_model: ${hidden_dim}
-    dropout: 0.05
+    dropout: 0.1
     nhead: ${nheads}
     normalize_before: ${pre_norm}
     return_intermediate_dec: True
@@ -97,7 +97,7 @@ policy:
       d_model: ${hidden_dim}
       nhead: ${nheads}
       dim_feedforward: ${dim_feedforward}
-      dropout: 0.05
+      dropout: 0.1
       activation: relu
       normalize_before: ${pre_norm}
     num_layers: ${enc_layers}
@@ -123,7 +123,7 @@ dataloader:
 
 
 optimizer:
-  lr: 1e-5
+  lr: 5e-5
   betas: [0.95, 0.999]
   eps: 1.0e-8
   weight_decay: 1.0e-4
@@ -145,7 +145,7 @@ checkpoint:
   auto_insert_metric_name: False
 
 trainer:
-  max_epochs: 1
+  max_epochs: 500
   accelerator: auto
   devices: 1
   precision: 32
