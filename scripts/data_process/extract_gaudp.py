@@ -98,9 +98,18 @@ def main(dataset_path: str, config_path: str, output_path: str) -> None:
             data=origin_f['qpos'][:],
             # **comp_kwaegs
         )
+        action = origin_f['action'][:]
+        # 将action的夹爪替换为master_action的夹爪，从而使夹爪能够抓的更牢固。
+        # 若 hdf5 不含 master_action，则回退为仅使用 action。
+        if 'master_action' in origin_f:
+            master_action = origin_f['master_action'][:]
+            action[:, 7] = master_action[:, 7]
+            action[:, 13] = master_action[:, 13]
+        else:
+            print('\033[33m[WARN] 源文件不含 master_action，回退为仅使用 action（夹爪未替换）\033[0m')
         f.create_dataset(
             "action",
-            data=origin_f['action'][:],
+            data=action,
             # **comp_kwaegs
         )
         f.create_dataset(

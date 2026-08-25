@@ -45,6 +45,14 @@ def extract_hdf5_data(hdf5_file):
         # cam_right = f['cam_right'][:, :, 80:-80]
         # cam_left = f['cam_left'][:, :, 80:-80]
         action = f['action'][:]
+        # 将action的夹爪替换为master_action的夹爪，从而使夹爪能够抓的更牢固。
+        # 若 hdf5 不含 master_action，则回退为仅使用 action。
+        if 'master_action' in f:
+            master_action = f['master_action'][:]
+            action[:, 7] = master_action[:, 7]
+            action[:, 13] = master_action[:, 13]
+        else:
+            print(f'\033[33m[WARN] {hdf5_file} 不含 master_action，回退为仅使用 action（夹爪未替换）\033[0m')
         qpos = f['observations/qpos'][:]
         cam_high = f['observations/images/cam_high'][:]
 
