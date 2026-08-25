@@ -1,3 +1,6 @@
+# 将原始遥操作采集的 episode hdf5 转换为训练用的合并 h5：
+# 读取 action / qpos / cam_high，把 action 的左右夹爪替换为 master_action 的夹爪（抓取更牢固），
+# 并把所有 episode 沿时间维拼接，输出 cam_high、qpos、action 与 episode_ends。
 import argparse
 from pathlib import Path
 from tqdm import tqdm
@@ -35,15 +38,6 @@ def extract_hdf5_data(hdf5_file):
     /observations/qvel:                     (200, 14)               float32
     """
     with h5py.File(hdf5_file, 'r') as f:
-        # action = f['action'][:]
-        # qpos = f['observations/qpos'][:]
-        # cam_right = f['observations/images/cam_right_wrist'][:]
-        # cam_left = f['observations/images/cam_left_wrist'][:]
-        # <KeysViewHDF5 ['action', 'base_action', 'observations']>
-        # action = f['action'][:]
-        # qpos = f['qpos'][:]
-        # cam_right = f['cam_right'][:, :, 80:-80]
-        # cam_left = f['cam_left'][:, :, 80:-80]
         action = f['action'][:]
         # 将action的夹爪替换为master_action的夹爪，从而使夹爪能够抓的更牢固。
         # 若 hdf5 不含 master_action，则回退为仅使用 action。
