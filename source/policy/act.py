@@ -241,7 +241,7 @@ class ACT(BasePolicy):
                 self.action_chunk_buffer = action_pred.unsqueeze(1).repeat(1, self.chunk_size // self.n_action_steps, 1, 1)   # [bs, self.chunk_size//self.n_action_steps, self.chunk_size, self.action_dim]
                 self.temporal_agg_init = True
             else:
-                new_action_chunk_buffer = torch.zeros([bs, self.chunk_size // self.n_action_steps, self.chunk_size, self.action_dim]).cuda()
+                new_action_chunk_buffer = torch.zeros([bs, self.chunk_size // self.n_action_steps, self.chunk_size, self.action_dim]).to(value.device)
                 new_action_chunk_buffer[:, self.n_action_steps:, :-self.n_action_steps, :] = self.action_chunk_buffer[:, :-self.n_action_steps, self.n_action_steps:, :]
                 new_action_chunk_buffer[:, 0, ...] = action_pred
                 self.action_chunk_buffer = new_action_chunk_buffer
@@ -266,6 +266,19 @@ class ACT(BasePolicy):
         return loss
     
     def validation_step(self, batch, batch_idx):
-        loss, _  = self.compute_loss(batch)
+        loss, _ = self.compute_loss(batch)
         self.log('val/loss', loss, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
+
+        obs_dict = batch['obs']
+        gt_action = batch['action']
+        self.reset()  # 清除 temporal_agg 等状态
+        result = self.predict_action(obs_dict)
+        pred_action = result['action_pred'] if 'action_pred' in result else result['action']
+        # 只统计实际执行段（n_action_steps）的 MSE，与部署端执行粒度一致
+        start = self.n_obs_steps - 1
+        end = start + self.n_action_steps
+        pred_exec = pred_action[:, start:end]
+        gt_exec = gt_action[:, start:end]
+        mse = F.mse_loss(pred_exec, gt_exec)
+        self.log('val/action_mse', mse, prog_bar=False, on_step=False, on_epoch=True, sync_dist=True)
         return loss

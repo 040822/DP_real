@@ -12,7 +12,8 @@ import torch
 import pathlib
 from hydra.core.hydra_config import HydraConfig
 from omegaconf import OmegaConf
-from torch.utils.data import DataLoader, random_split
+import numpy as np
+from torch.utils.data import DataLoader, random_split, Subset
 from torch.optim.swa_utils import get_ema_avg_fn
 from lightning.pytorch import Trainer
 from lightning.pytorch.callbacks import LearningRateMonitor, TQDMProgressBar
@@ -70,7 +71,28 @@ def main(cfg: OmegaConf):
         
     
     dataset = hydra.utils.instantiate(cfg.task.dataset)
-    train_dataset, val_dataset = random_split(dataset, [int(len(dataset)*0.95), len(dataset) - int(len(dataset)*0.95)])
+
+    # 按 episode 切分 train / eval，而非按样本随机切分，避免同一 episode 泄漏到两个集合
+    episode_ends = dataset.data["episode_ends"]
+    n_episodes = len(episode_ends)
+    val_ratio = 0.05
+    rng = np.random.default_rng(cfg.training.seed)
+    n_val = min(max(1, int(n_episodes * val_ratio)), n_episodes - 1)
+    val_episodes = rng.choice(n_episodes, size=n_val, replace=False)
+    val_ep_mask = np.zeros(n_episodes, dtype=bool)
+    val_ep_mask[val_episodes] = True
+
+    # 根据每个样本 buffer_start_idx 推断其所属 episode
+    buffer_start = dataset.indices[:, 0]
+    sample_episode = np.searchsorted(episode_ends, buffer_start, side="right")
+    train_idx = np.where(~val_ep_mask[sample_episode])[0].tolist()
+    val_idx = np.where(val_ep_mask[sample_episode])[0].tolist()
+
+    train_dataset = Subset(dataset, train_idx)
+    val_dataset = Subset(dataset, val_idx)
+    print(f"[Train] episodes={n_episodes}, train_episodes={n_episodes - n_val}, "
+          f"val_episodes={n_val}, train_samples={len(train_idx)}, val_samples={len(val_idx)}")
+
     train_dataloader = DataLoader(train_dataset, **cfg.dataloader.train)
     val_dataloader = DataLoader(val_dataset, **cfg.dataloader.val)
 
