@@ -34,9 +34,32 @@ from pathlib import Path
 from termcolor import cprint
 
 import sys
-# w覆盖写；buffering=1 实时刷新，不会缓存
-sys.stdout = open("debug.out", "w", buffering=1, encoding="utf-8")
-sys.stderr = sys.stdout  # print打印 + 异常报错堆栈，全部写入out文件
+
+
+class _Tee:
+    # 同时写入终端和文件，实时刷新不缓存
+    def __init__(self, file_name, mode="w", encoding="utf-8"):
+        self.file = open(file_name, mode, buffering=1, encoding=encoding)
+        self.terminal = sys.__stdout__
+
+    def write(self, message):
+        self.terminal.write(message)
+        self.file.write(message)
+        self.flush()
+
+    def flush(self):
+        self.terminal.flush()
+        self.file.flush()
+
+    def isatty(self):
+        return self.terminal.isatty()
+
+    def fileno(self):
+        return self.terminal.fileno()
+
+
+sys.stdout = _Tee("debug.out")  # print 同时输出到终端和 debug.out
+sys.stderr = sys.stdout  # 异常报错堆栈也走同一 Tee
 import numpy as np
 
 sys.path.append("./")
