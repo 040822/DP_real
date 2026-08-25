@@ -34,9 +34,21 @@ def extract_hdf5_data(hdf5_file):
     /observations/images/cam_high:          (200, 480, 640, 3)      uint8
     /observations/images/cam_left_wrist:    (200, 480, 640, 3)      uint8
     /observations/images/cam_right_wrist:   (200, 480, 640, 3)      uint8
+    /observations/images_depth/cam_high:    (200, 480, 640)         uint16
+    /observations/images_depth/cam_left_wrist: (200, 480, 640)      uint16
+    /observations/images_depth/cam_right_wrist:(200, 480, 640)      uint16
     /observations/qpos:                     (200, 14)               float32
     /observations/qvel:                     (200, 14)               float32
+
+    相机规格：(输出键名, hdf5 中原始相机名)
     """
+    # (obs 输出键, hdf5 中彩色/深度对应的相机名)
+    cam_specs = [
+        ('cam_high', 'cam_high'),
+        ('cam_left', 'cam_left_wrist'),
+        ('cam_right', 'cam_right_wrist'),
+    ]
+
     with h5py.File(hdf5_file, 'r') as f:
         action = f['action'][:]
         # 将action的夹爪替换为master_action的夹爪，从而使夹爪能够抓的更牢固。
@@ -48,18 +60,23 @@ def extract_hdf5_data(hdf5_file):
         else:
             print(f'\033[33m[WARN] {hdf5_file} 不含 master_action，回退为仅使用 action（夹爪未替换）\033[0m')
         qpos = f['observations/qpos'][:]
-        cam_high = f['observations/images/cam_high'][:]
 
-        # 默认记录左右腕部相机；若某一侧不存在则跳过并给出 WARN。
-        obs = {'cam_high': cam_high, 'qpos': qpos}
-        if 'cam_left_wrist' in f['observations/images']:
-            obs['cam_left'] = f['observations/images/cam_left_wrist'][:]
-        else:
-            print(f'\033[33m[WARN] {hdf5_file} 左侧腕部相机(cam_left_wrist)不存在，跳过\033[0m')
-        if 'cam_right_wrist' in f['observations/images']:
-            obs['cam_right'] = f['observations/images/cam_right_wrist'][:]
-        else:
-            print(f'\033[33m[WARN] {hdf5_file} 右侧腕部相机(cam_right_wrist)不存在，跳过\033[0m')
+        # 记录各彩色相机；若某一侧不存在则跳过并给出 WARN。
+        obs = {'qpos': qpos}
+        use_depth = 'observations/images_depth' in f
+        for out_key, src_name in cam_specs:
+            if src_name in f['observations/images']:
+                obs[out_key] = f[f'observations/images/{src_name}'][:]
+            else:
+                print(f'\033[33m[WARN] {hdf5_file} 相机({src_name})不存在，跳过\033[0m')
+
+            # 深度相机：仅在采集时开启了深度（images_depth 组存在）且存在该相机时记录；
+            # 否则跳过并给出 WARN。深度键名为 depth_{相机后缀}（如 depth_high）。
+            depth_key = f'depth_{out_key.split("cam_")[-1]}'
+            if use_depth and src_name in f['observations/images_depth']:
+                obs[depth_key] = f[f'observations/images_depth/{src_name}'][:]
+            else:
+                print(f'\033[33m[WARN] {hdf5_file} 深度相机({src_name})不存在，跳过\033[0m')
 
     return {
         'obs': obs,
@@ -82,12 +99,15 @@ def main(dataset_dir: str, output_path: str) -> None:
             if data is not None:
                 qpos = obs["qpos"]
 
-                # 计算所有相机 / qpos / action 的最小长度并对齐
-                cam_names = [k for k in obs.keys() if k != "qpos"]
-                lengths = [obs[c].shape[0] for c in cam_names] + [qpos.shape[0], action.shape[0]]
+                # 计算所有相机 / 深度 / qpos / action 的最小长度并对齐
+                cam_names = [k for k in obs.keys() if k not in ("qpos",) and not k.startswith("depth_")]
+                depth_names = [k for k in obs.keys() if k.startswith("depth_")]
+                lengths = ([obs[c].shape[0] for c in cam_names]
+                           + [obs[d].shape[0] for d in depth_names]
+                           + [qpos.shape[0], action.shape[0]])
                 min_len = min(lengths)
 
-                # 处理各相机：裁剪 + HWC->CHW + 插值到 256x256
+                # 处理各彩色相机：裁剪 + HWC->CHW + 插值到 256x256
                 proc_cams = {}
                 for c in cam_names:
                     cam = np.array(obs[c][:min_len]).astype(np.uint8)
@@ -95,6 +115,16 @@ def main(dataset_dir: str, output_path: str) -> None:
                     cam = torch.tensor(cam).float().to(device)
                     cam = F.interpolate(cam, size=(256, 256), mode='bilinear').cpu().numpy()
                     proc_cams[c] = cam
+
+                # 处理各深度相机：单通道 (T, H, W) -> 加通道维 -> 插值到 256x256，
+                # 使用 nearest 以保留深度值；最终形状 (T, 256, 256)，dtype uint16。
+                proc_depth = {}
+                for d in depth_names:
+                    darr = np.array(obs[d][:min_len]).astype(np.uint16)
+                    dt = torch.tensor(darr).float().unsqueeze(1).to(device)
+                    dt = F.interpolate(dt, size=(256, 256), mode='nearest').cpu().numpy()
+                    proc_depth[d] = dt.squeeze(1).astype(np.uint16)
+
                 qpos = np.array(qpos[:min_len]).astype(np.float32)
                 action = np.array(action[:min_len]).astype(np.float32)
 
@@ -109,6 +139,15 @@ def main(dataset_dir: str, output_path: str) -> None:
                             shape=cam.shape,
                             maxshape=(None, *cam.shape[1:]),
                             dtype="uint8",
+                            **comp_kwaegs
+                        )
+                    for d, darr in proc_depth.items():
+                        f.create_dataset(
+                            d,
+                            data=darr,
+                            shape=darr.shape,
+                            maxshape=(None, *darr.shape[1:]),
+                            dtype="uint16",
                             **comp_kwaegs
                         )
                     f.create_dataset(
@@ -131,6 +170,9 @@ def main(dataset_dir: str, output_path: str) -> None:
                     for c, cam in proc_cams.items():
                         f[c].resize((f[c].shape[0] + cam.shape[0]), axis=0)
                         f[c][-cam.shape[0]:] = cam
+                    for d, darr in proc_depth.items():
+                        f[d].resize((f[d].shape[0] + darr.shape[0]), axis=0)
+                        f[d][-darr.shape[0]:] = darr
                     f["qpos"].resize((f["qpos"].shape[0] + qpos.shape[0]), axis=0)
                     f["qpos"][-qpos.shape[0]:] = qpos
                     f["action"].resize((f["action"].shape[0] + action.shape[0]), axis=0)
